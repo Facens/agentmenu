@@ -1,0 +1,59 @@
+name: CI
+
+# Build, test, bundle, and assert the bundle's layout and signature
+# consistency on every push and pull request (R10). A pull request from a fork
+# receives no secrets, so the bundle here is ad-hoc signed and the assertion is
+# consistency, not authority: no Mach-O left linker-signed while another
+# carries an identity, entitlements on the app only, hardened runtime
+# requested (R24, KTD16). The authority check runs in release.yml, where the
+# certificate exists.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Show toolchain
+        run: swift --version
+
+      # Licence headers on every Swift file, and AgentMenuKit free of AppKit,
+      # SwiftUI and Sparkle — in the manifest as well as in the imports.
+      - name: Check the source tree
+        run: packaging/check-source.sh
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Test
+        run: make test
+
+      - name: Bundle
+        run: make bundle
+
+      - name: Check bundle layout
+        run: |
+          test -x dist/AgentMenu.app/Contents/MacOS/AgentMenu
+          test -x dist/AgentMenu.app/Contents/Resources/bin/agentmenu
+          test -f dist/AgentMenu.app/Contents/Info.plist
+          test -d dist/AgentMenu.app/Contents/Resources/agents
+
+      - name: Assert signature consistency
+        run: packaging/verify-signing.sh consistency dist/AgentMenu.app
+
+      # The CLI imports only Foundation, Darwin and AgentMenuKit, so a UI
+      # framework in its load commands can only have come through the Kit —
+      # a link-level check no spelling of an import can dodge.
+      - name: Assert the CLI links no UI framework
+        run: |
+          otool -L dist/AgentMenu.app/Contents/Resources/bin/agentmenu
+          ! otool -L dist/AgentMenu.app/Contents/Resources/bin/agentmenu | grep -qE '/(AppKit|SwiftUI|Sparkle)\.framework/'

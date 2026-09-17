@@ -1,0 +1,11 @@
+# codex — not installed on the development machine, nothing verified. A stub:
+# id, display name and binary only, disabled and marked unverified. No
+# capability sections: guessing a flag here is the exact failure KTD3 exists
+# to prevent. Someone who installs codex and executes its flags can fill this
+# in and open an issue — see docs/adding-an-agent.md.
+schema = 1
+id = "codex"
+display_name = "Codex"
+binary = "codex"
+enabled = false
+unverified = true

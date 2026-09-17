@@ -1,0 +1,61 @@
+# Claude Code — the one agent verified end to end in v1.
+# Every value below was executed against the binary on the date recorded here;
+# see docs/research-notes.md for the transcript of each check.
+schema = 1
+id = "claude-code"
+display_name = "Claude Code"
+binary = "claude"
+enabled = true
+unverified = false
+verified_version = "2.1.266"
+verified_on = "2026-09-09"
+
+# The folder is delivered as the terminal's working directory, not as an
+# argument, so the agent takes no project path of its own.
+project_arg = "none"
+extra_args = []
+
+# A profile is an account. For Claude Code it is an environment variable
+# holding the configuration directory.
+profile_env = "CLAUDE_CONFIG_DIR"
+settings_file = "{profile_dir}/settings.json"
+usage_snapshot = "{profile_dir}/tb-rate-snapshot.json"
+
+[model]
+flag = "--model"
+# Aliases the binary's model catalog accepts. haiku is reachable only by full
+# model id, so it is not offered as a preset value.
+values = ["fable", "opus", "sonnet"]
+seed_from_settings = "model"
+
+[effort]
+flag = "--effort"
+values = ["low", "medium", "high", "xhigh", "max"]
+
+[permission_mode]
+flag = "--permission-mode"
+values = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"]
+# R37: an effective value in this list is marked on the row before the click.
+# bypassPermissions is the equivalent of --dangerously-skip-permissions
+# (research-notes.md). dontAsk is marked on its name alone — "don't ask" is
+# unambiguous, and nothing in --help or research-notes.md contradicts it.
+# plan is more restrictive, not less (--help: a read-only planning mode).
+# acceptEdits, auto and manual are NOT marked: --help lists them as choices
+# but does not document their individual prompting behaviour, "auto" appears
+# to route through the auto-mode classifier's allow/soft_deny/hard_deny rules
+# (`claude auto-mode defaults`) rather than skip prompting outright, and
+# neither was executed against the binary the way bypassPermissions was. Left
+# unmarked rather than guessed — see docs/adding-an-agent.md.
+bypass_values = ["bypassPermissions", "dontAsk"]
+
+[advisor]
+# --advisor is hidden from --help; it was read out of the binary and its
+# acceptance executed. The advisor model must be a public alias with an advisor
+# rank in the model catalog.
+flag = "--advisor"
+values = ["opus", "sonnet", "fable"]
+# Verified 2026-09-09: --settings overrides the profile's settings.json, and the
+# binary treats an empty advisorModel as unset, so this pair turns the advisor
+# off for one session without touching the profile.
+disable_args = ["--settings", "{\"advisorModel\":\"\"}"]
+seed_from_settings = "advisorModel"

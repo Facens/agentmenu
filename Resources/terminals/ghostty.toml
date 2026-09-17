@@ -1,0 +1,10 @@
+# Ghostty — present, disabled, unverified. Matches the argv example in
+# docs/adding-a-terminal.md.
+schema = 1
+id = "ghostty"
+display_name = "Ghostty"
+kind = "argv"
+binary = "ghostty"
+args = ["--working-directory={dir}", "-e", "{command}"]
+enabled = false
+unverified = true

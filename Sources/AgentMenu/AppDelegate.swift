@@ -1,0 +1,57 @@
+// Copyright (c) 2026 Andrea Giannangelo
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import AppKit
+import SwiftUI
+import AgentMenuKit
+
+/// Owns the app's runtime objects and the status item.
+///
+/// An `LSUIElement` app has no windows of its own until it makes one, so the
+/// delegate is where the menu-bar item is created and where first run is offered.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let environment = AppEnvironment()
+    private var statusItem: StatusItemController?
+    private lazy var settingsWindow = SettingsWindowController(environment: environment)
+
+    /// The one instance, so the popover and the delegate open the same window.
+    static private(set) weak var shared: AppDelegate?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.shared = self
+        // Defaults first: a launcher that shows only $HOME until a wizard is
+        // finished is a blank page, and the window can be closed.
+        environment.seedIfMissing()
+        statusItem = StatusItemController(environment: environment)
+        // Pay the Apple Event setup cost now rather than on the first click.
+        FinderTarget.warmUp()
+
+
+    }
+
+    /// Opens the settings window. A call, not a wish: the previous route asked
+    /// the responder chain for a private selector and accepted silence.
+    func showSettings() {
+        settingsWindow.show()
+    }
+
+    /// Opening the app again when it is already running — from Finder, from
+    /// Spotlight, from the Dock — has nowhere obvious to go in a menu-bar app.
+    /// Settings is the honest destination, and it doubles as the way in when a
+    /// menu-bar manager has hidden the icon.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        showSettings()
+        return true
+    }
+
+    /// A save is at most 0.4 s away from being written, and terminate does not
+    /// drain pending work items — so "change a preset, then Quit" is two clicks
+    /// a few hundred milliseconds apart that used to lose the change silently.
+    func applicationWillTerminate(_ notification: Notification) {
+        environment.flushPendingSave()
+    }
+
+    /// Nothing to restore: the popover is the app's window.
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+}

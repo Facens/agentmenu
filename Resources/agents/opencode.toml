@@ -1,0 +1,16 @@
+# opencode — installed on the development machine at ~/.opencode/bin/opencode,
+# but only the binary and its profile mechanism were verified. Its model and
+# effort flags were never executed, so those sections are omitted rather than
+# guessed (KTD3: an absent section is the honest answer).
+schema = 1
+id = "opencode"
+display_name = "OpenCode"
+binary = "opencode"
+enabled = false
+unverified = true
+
+# `opencode [project]` takes the folder as its last argument.
+project_arg = "positional"
+extra_args = []
+
+profile_env = "OPENCODE_CONFIG_DIR"

@@ -1,0 +1,5 @@
+.build/
+dist/
+.DS_Store
+*.xcuserstate
+docs/design-mockup/agentmenu-popover-design.html

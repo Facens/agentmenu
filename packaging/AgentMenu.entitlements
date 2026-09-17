@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	R4: under the hardened runtime, an in-process NSAppleScript call (FinderTarget
+	asks Finder for the front window's folder) is refused outright with
+	errAEEventNotPermitted (-1743) unless the process holds this entitlement.
+	With it, macOS prompts the user once and remembers the answer. The nested
+	CLI never sends Apple Events and is signed without this file.
+	-->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>

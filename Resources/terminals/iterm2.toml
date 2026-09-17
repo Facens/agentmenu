@@ -1,0 +1,27 @@
+# iTerm2 — verified. This AppleScript is the one the SwiftBar plugin AgentMenu
+# replaces has been using: a new tab in the current window, a new window when
+# iTerm has none.
+schema = 1
+id = "iterm2"
+display_name = "iTerm2"
+kind = "applescript"
+bundle_id = "com.googlecode.iterm2"
+enabled = true
+unverified = false
+applescript = """
+on run argv
+  set cmd to item 1 of argv
+  tell application "iTerm"
+    activate
+    if (count of windows) = 0 then
+      set w to (create window with default profile)
+      tell current session of w to write text cmd
+    else
+      tell current window
+        set t to (create tab with default profile)
+        tell current session of t to write text cmd
+      end tell
+    end if
+  end tell
+end run
+"""

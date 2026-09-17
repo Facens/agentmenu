@@ -1,0 +1,191 @@
+name: Release
+
+# A v* tag on the public repository produces a GitHub Release carrying a
+# notarized, stapled archive and its SHA-256 (R11). The order of the steps is
+# the whole point: the stapled ticket has to be inside the bytes that get
+# hashed and, later, EdDSA-signed, so the archive that is submitted for
+# notarization is never the archive users download. Archive #1 exists only to
+# be submitted; the .app is stapled; archive #2 is what ships (KTD4).
+#
+# Tagging publishes a release. It does not publish an update: promotion into
+# the appcast is a separate, manually approved job (KTD15).
+
+on:
+  push:
+    tags: ["v*"]
+
+# R27: no workflow-level grant. Each job asks for what it needs, so a future
+# appcast-promotion job does not inherit contents: write from here.
+permissions: {}
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      contents: write   # to create the release and attach the archive
+    # Notarization can stall for hours; a slow run is not a failed release.
+    timeout-minutes: 240
+    # The certificate and the App Store Connect key live in this environment,
+    # restricted to v* tags with a required reviewer (KTD7) — not as plain
+    # repository secrets any job on any ref could read.
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: meta
+        name: Read the version from the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # KTD10: every tag is a final version, MAJOR.MINOR.PATCH. bundle.sh
+          # refuses anything else too; failing here says so before a build.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag must be vMAJOR.MINOR.PATCH with no suffix, got $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # A tag is the one build users actually install, so it runs the suite
+      # rather than trusting that CI ran on the commit it points at.
+      - name: Test
+        run: make test
+
+      - name: Import the Developer ID certificate into a temporary keychain
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          if [ -z "$DEVELOPER_ID_P12_BASE64" ] || [ -z "$DEVELOPER_ID_P12_PASSWORD" ]; then
+            echo "::error::DEVELOPER_ID_P12_BASE64 / DEVELOPER_ID_P12_PASSWORD are not set in the release environment"
+            exit 1
+          fi
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          P12="$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | base64 --decode > "$P12"
+          security import "$P12" -k "$KEYCHAIN" -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$P12"
+
+          # Without the partition list, codesign waits on a keychain dialog no
+          # runner can answer. Without the search list, codesign cannot see an
+          # identity that find-identity reports.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+          if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -q "Developer ID Application"; then
+            echo "::error::the imported certificate carries no Developer ID Application identity"
+            exit 1
+          fi
+
+      - name: Bundle and sign
+        run: make bundle VERSION=${{ steps.meta.outputs.version }}
+
+      # R6: the release refuses a bundle whose Mach-Os do not all carry the
+      # Developer ID authority and the runtime flag. bundle.sh already ran
+      # this check; this makes the gate visible as its own step, and it runs
+      # before notarization is attempted rather than after it fails.
+      - name: Assert signature authority
+        run: packaging/verify-signing.sh authority dist/AgentMenu.app
+
+      - name: Check bundle layout
+        run: |
+          test -x dist/AgentMenu.app/Contents/MacOS/AgentMenu
+          test -x dist/AgentMenu.app/Contents/Resources/bin/agentmenu
+          test -f dist/AgentMenu.app/Contents/Info.plist
+          test -d dist/AgentMenu.app/Contents/Resources/agents
+          # R30: the release notes say Apple Silicon only; make that true by
+          # assertion rather than by which runner happened to build it.
+          test "$(file -b dist/AgentMenu.app/Contents/MacOS/AgentMenu)" = 'Mach-O 64-bit executable arm64'
+
+      # KTD11: an App Store Connect Team Key, passed per run. Not
+      # store-credentials, which assumes a persistent keychain this runner
+      # does not have. A personal key is a different object and notarytool
+      # will not take it.
+      - name: Notarize
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_KEY_P8" ]; then
+            echo "::error::ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 are not set in the release environment"
+            exit 1
+          fi
+          KEY="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$ASC_KEY_P8" > "$KEY"
+          # Removed on every exit from this step, including one bash -e takes
+          # early; the always() step below covers a cancelled job.
+          trap 'rm -f "$KEY"' EXIT
+
+          # Archive #1: submitted, never shipped. A stapled ticket cannot be
+          # attached to a zip, only to the .app inside it.
+          SUBMISSION="$RUNNER_TEMP/AgentMenu-${{ steps.meta.outputs.version }}-submission.zip"
+          ditto -c -k --sequesterRsrc --keepParent dist/AgentMenu.app "$SUBMISSION"
+
+          xcrun notarytool submit "$SUBMISSION" \
+            --key "$KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 3h --output-format json > "$RUNNER_TEMP/notarize.json" || true
+          cat "$RUNNER_TEMP/notarize.json"
+
+          # An empty or non-JSON result (notarytool died before answering)
+          # reads as no status, so the diagnostic branch below still runs.
+          STATUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status",""))' "$RUNNER_TEMP/notarize.json" 2>/dev/null || true)"
+          if [ "$STATUS" != "Accepted" ]; then
+            ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("id",""))' "$RUNNER_TEMP/notarize.json" 2>/dev/null || true)"
+            [ -n "$ID" ] && xcrun notarytool log "$ID" --key "$KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" || true
+            echo "::error::notarization did not end in Accepted (status: '${STATUS:-none}')"
+            exit 1
+          fi
+
+      - name: Staple the app
+        run: |
+          xcrun stapler staple dist/AgentMenu.app
+          xcrun stapler validate dist/AgentMenu.app
+          spctl -a -vvv -t exec dist/AgentMenu.app 2>&1 | tee "$RUNNER_TEMP/spctl.txt"
+          grep -q "source=Notarized Developer ID" "$RUNNER_TEMP/spctl.txt"
+
+      # Archive #2: the one users download. Its hash, and later its EdDSA
+      # signature, cover the stapled bytes — computing either against the
+      # submission archive would produce a feed Sparkle silently refuses.
+      - id: archive
+        name: Archive the stapled app
+        run: |
+          NAME="AgentMenu-${{ steps.meta.outputs.version }}.zip"
+          ditto -c -k --sequesterRsrc --keepParent dist/AgentMenu.app "$NAME"
+          shasum -a 256 "$NAME" | tee "$NAME.sha256"
+          echo "sha256=$(cut -d' ' -f1 "$NAME.sha256")" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: |
+            ${{ steps.archive.outputs.name }}
+            ${{ steps.archive.outputs.name }}.sha256
+          generate_release_notes: true
+          # R30: stated in every release's notes, ahead of the generated list.
+          body: |
+            **Apple Silicon only.** This build is arm64 and does not run on an Intel Mac.
+
+            Download `${{ steps.archive.outputs.name }}`, unzip it, and move `AgentMenu.app` to `/Applications` before opening it. It is signed with a Developer ID and notarized, so it opens with no warning.
+
+            SHA-256: `${{ steps.archive.outputs.sha256 }}`
+
+      # The keychain holds the private key for as long as the job runs. It, the
+      # decoded certificate and the notarization key are removed on every path
+      # out of the job, including a failed or cancelled one.
+      - name: Remove the temporary keychain and key material
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN:-}" ] && [ -f "$KEYCHAIN" ]; then
+            security delete-keychain "$KEYCHAIN"
+          fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/developer-id.p12"

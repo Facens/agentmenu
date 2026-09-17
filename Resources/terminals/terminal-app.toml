@@ -1,0 +1,24 @@
+# Terminal.app — present, disabled, unverified. Nobody has run this script by
+# hand yet (docs/adding-a-terminal.md step 2), so it is not claimed to behave
+# any particular way beyond what `do script` documents: it runs the command in
+# a new window, or in the front window's active tab if one is already open.
+schema = 1
+id = "terminal-app"
+display_name = "Terminal"
+kind = "applescript"
+bundle_id = "com.apple.Terminal"
+enabled = false
+unverified = true
+applescript = """
+on run argv
+  set cmd to item 1 of argv
+  tell application "Terminal"
+    activate
+    if (count of windows) = 0 then
+      do script cmd
+    else
+      do script cmd in window 1
+    end if
+  end tell
+end run
+"""

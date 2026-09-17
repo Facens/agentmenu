@@ -1,0 +1,74 @@
+name: CLA
+
+# R35: the contribution grant in CONTRIBUTING.md is a merge precondition, not
+# a document nobody read. No outside contribution is merged before the
+# acceptance is recorded in the signatures file.
+#
+# This workflow runs in pull_request_target context with a token that can
+# write pull-request comments and statuses, and its issue_comment trigger
+# fires on any comment from any account. Three constraints keep that safe,
+# and they are enforced, not just written down (R27):
+#
+#   - It never checks out pull-request content. No actions/checkout, no
+#     script from the pull request, nothing the author of the pull request
+#     controls runs here.
+#   - The one action it runs is pinned to a full commit SHA. A mutable tag in
+#     this context would let a retagged upstream execute arbitrary code with
+#     this token.
+#   - The comment guard is an exact-string match, and this file sits behind
+#     CODEOWNERS review so neither the guard nor the constraints above can be
+#     edited away in a pull request that nobody looked at.
+#
+# The token is the job's own GITHUB_TOKEN with contents: write, which is what
+# the pinned action needs to record a signature on the cla-signatures branch of
+# this repository (it uses a personal token only for a remote signatures
+# repository). That token dies with the job and cannot push to main or
+# gh-pages, whose rulesets have no bypass for it — a narrower reach than any
+# personal access token, which would cover the whole repository for as long
+# as it lived. actions: write is deliberately absent: it would let this job
+# dispatch other workflows. The cost is that the action cannot re-run this
+# workflow's own failed pull_request_target run after a signature, so the
+# check turns green on the contributor's next push or when the maintainer
+# re-runs it; actions: read keeps the action's own lookups from failing.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions: {}
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to record the signature on the cla-signatures branch
+      actions: read
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Check or record the contributor grant
+        if: >-
+          (github.event.comment.body == 'recheck' ||
+           github.event.comment.body == 'I have read the CONTRIBUTING document and I accept the contribution licence grant.')
+          || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          branch: cla-signatures
+          path-to-signatures: signatures/version1/cla.json
+          path-to-document: https://github.com/Facens/agentmenu/blob/main/CONTRIBUTING.md
+          allowlist: Facens,dependabot[bot]
+          custom-notsigned-prcomment: >-
+            Thanks for the pull request. Before it can be merged, please read
+            [CONTRIBUTING.md](https://github.com/Facens/agentmenu/blob/main/CONTRIBUTING.md)
+            and post the comment below in this pull request. It records that you
+            grant the maintainer the right to relicense your contribution,
+            including in a paid build — the reason is explained in that file.
+          custom-pr-sign-comment: >-
+            I have read the CONTRIBUTING document and I accept the contribution licence grant.
+          custom-allsigned-prcomment: >-
+            The contribution grant is recorded. Thanks. If the CLA check is
+            still red, push again or wait for the maintainer to re-run it.

@@ -1,0 +1,14 @@
+# Paths that need the maintainer's review before a pull request touching them
+# can merge, once the repository ruleset requires code-owner review (R27).
+#
+# The workflows run with tokens: cla.yml in pull_request_target context, and
+# release.yml with the certificate, the notarization key and, later, the
+# appcast key. The constraints written into them hold only for as long as
+# nobody can edit them away unreviewed. The packaging scripts decide what gets
+# signed, checked and published, so they are protected the same way.
+/.github/                @Facens
+/packaging/              @Facens
+# The entry points those workflows execute: make test, make bundle, and the
+# manifest check-source.sh dumps.
+/Makefile                @Facens
+/Package.swift           @Facens
