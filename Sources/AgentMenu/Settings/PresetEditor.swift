@@ -19,16 +19,26 @@ struct PresetEditor: View {
     /// property of the machine, not of a project folder. Only the defaults pane
     /// shows it.
     var showsTerminal: Bool = false
+    /// This form is shared by the defaults pane and the per-folder editor in
+    /// `FoldersPane.swift`, and both put a "Model" picker on screen at once
+    /// only if you count them across panes — but the identifier contract
+    /// (KTD9) does not know which pane it is looking at, only the string it
+    /// was given. `idScope` is that string: `"defaults"` or
+    /// `"folders.preset"`, composed by `AccessibilityID.Settings.preset`.
+    var idScope: String = "defaults"
 
     var body: some View {
         if let values = options.model {
-            row("Model", values: values, selection: $preset.model, inherited: inherited?.model)
+            row("Model", values: values, selection: $preset.model, inherited: inherited?.model,
+                id: AccessibilityID.Settings.preset(idScope, "model"))
         }
         if let values = options.effort {
-            row("Effort", values: values, selection: $preset.effort, inherited: inherited?.effort)
+            row("Effort", values: values, selection: $preset.effort, inherited: inherited?.effort,
+                id: AccessibilityID.Settings.preset(idScope, "effort"))
         }
         if let values = options.permissionMode {
-            row("Permission", values: values, selection: $preset.permissionMode, inherited: inherited?.permissionMode)
+            row("Permission", values: values, selection: $preset.permissionMode, inherited: inherited?.permissionMode,
+                id: AccessibilityID.Settings.preset(idScope, "permission"))
             if let mode = preset.permissionMode ?? inherited?.permissionMode, options.isBypassing(mode) {
                 Label(
                     "This target launches without the agent's permission prompts. The row in the menu is marked before the click.",
@@ -43,11 +53,13 @@ struct PresetEditor: View {
         }
         if !options.agents.isEmpty {
             row("Agent", values: options.agents.map(\.id), selection: $preset.agent,
-                inherited: inherited?.agent, names: Dictionary(uniqueKeysWithValues: options.agents.map { ($0.id, $0.name) }))
+                inherited: inherited?.agent, names: Dictionary(uniqueKeysWithValues: options.agents.map { ($0.id, $0.name) }),
+                id: AccessibilityID.Settings.preset(idScope, "agent"))
         }
         if showsTerminal, !options.terminals.isEmpty {
             row("Terminal", values: options.terminals.map(\.id), selection: $preset.terminal,
-                inherited: inherited?.terminal, names: Dictionary(uniqueKeysWithValues: options.terminals.map { ($0.id, $0.name) }))
+                inherited: inherited?.terminal, names: Dictionary(uniqueKeysWithValues: options.terminals.map { ($0.id, $0.name) }),
+                id: AccessibilityID.Settings.preset(idScope, "terminal"))
         }
     }
 
@@ -56,7 +68,8 @@ struct PresetEditor: View {
         values: [String],
         selection: Binding<String?>,
         inherited: String?,
-        names: [String: String] = [:]
+        names: [String: String] = [:],
+        id: String
     ) -> some View {
         Picker(label, selection: selection) {
             Text(inheritLabel(inherited, names: names)).tag(String?.none)
@@ -64,6 +77,7 @@ struct PresetEditor: View {
                 Text(names[value] ?? value).tag(String?.some(value))
             }
         }
+        .accessibilityIdentifier(id)
     }
 
     private func advisorRow(_ values: [String]) -> some View {
@@ -76,6 +90,7 @@ struct PresetEditor: View {
                 Text(value).tag(AdvisorSetting?.some(.model(value)))
             }
         }
+        .accessibilityIdentifier(AccessibilityID.Settings.preset(idScope, "advisor"))
     }
 
     private func inheritLabel(_ inherited: String?, names: [String: String]) -> String {

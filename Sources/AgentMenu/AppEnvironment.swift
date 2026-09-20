@@ -18,6 +18,16 @@ final class AppEnvironment: ObservableObject {
     let usageReader: UsageReader
     let registry: ManifestRegistry
 
+    /// The overrides this launch resolved (U7, KTD4): all nil on an
+    /// ordinary launch, since `Overrides.forGUI()` — the default this is
+    /// constructed with — only reads the environment when `-AgentMenuHarness
+    /// YES` was in the argument domain. `AppDelegate` reads this back after
+    /// construction to pass the defaults suite, harness directory, manifests
+    /// root and profile root into `HarnessJournal.shared.activate(…)`, so
+    /// there is exactly one place — this struct — that decided what took
+    /// effect.
+    let overrides: Overrides
+
     /// The one copy of the configuration in this process.
     ///
     /// It used to be three — this object plus a copy captured inside each view
@@ -45,7 +55,16 @@ final class AppEnvironment: ObservableObject {
     /// change silently.
     @Published var saveFailure: String?
 
-    init(store: ConfigStore = ConfigStore()) {
+    /// `overrides` defaults to `Overrides.forGUI()` rather than an all-nil
+    /// value: that is the one call in the app that decides, from the real
+    /// argument domain, whether this launch is the harness's or a real
+    /// one — every other initializer parameter stays inert unless it says
+    /// so. `store`, when given explicitly, wins over `overrides.config`, the
+    /// same "explicit beats resolved" precedence `ConfigStore`'s own
+    /// callers already expect.
+    init(store: ConfigStore? = nil, overrides: Overrides = .forGUI()) {
+        self.overrides = overrides
+        let store = store ?? ConfigStore(url: overrides.config ?? ConfigStore.defaultURL)
         self.store = store
         self.usageReader = UsageReader()
         self.config = (try? store.load()) ?? Config()
@@ -57,7 +76,7 @@ final class AppEnvironment: ObservableObject {
             .flatMap { $0[.modificationDate] as? Date }
         self.registry = ManifestRegistry(
             bundledRoot: ResourceRoot.bundled(),
-            userRoot: ManifestRegistry.defaultUserRoot
+            userRoot: overrides.manifestsUserRoot ?? ManifestRegistry.defaultUserRoot
         )
         registry.load()
     }
@@ -145,7 +164,8 @@ final class AppEnvironment: ObservableObject {
         }
 
         seeded.profiles = Detection.profiles(
-            for: seeded.defaults.agent.flatMap { registry.agent(id: $0) }
+            for: seeded.defaults.agent.flatMap { registry.agent(id: $0) },
+            profileRoot: overrides.profileRoot
         )
         seeded.activeProfileID = seeded.profiles.first?.id
         seeded.folders = [FolderTarget(label: "Home", path: "~", profileID: seeded.profiles.first?.id)]
@@ -223,11 +243,6 @@ final class AppEnvironment: ObservableObject {
         ) == .available
     }
 
-    // The cc-launcher import lives in the CLI (`agentmenu import`) and in
-    // docs/migrating-from-cc-launcher.md. It is one person's migration off one
-    // machine's private launcher, and putting it in everyone's settings window
-    // asks a question only its author can answer.
-
     /// R47: the write into an agent's configuration directory happens in one
     /// place, the CLI, and the app only ever asks for it. Running the installed
     /// binary rather than linking its code keeps that true even here.
@@ -275,6 +290,14 @@ final class AppEnvironment: ObservableObject {
         outputGroup.wait()
 
         let output = String(data: collected, encoding: .utf8) ?? ""
+        // The only path on which the CLI can have written anything (KTD3),
+        // and its own report is what names the files it wrote.
+        HarnessJournal.shared.bridgeInstalled(
+            profile: profile,
+            ok: process.terminationStatus == 0,
+            report: output
+        )
+
         return output.isEmpty ? "Installed." : output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -356,7 +379,22 @@ extension AppEnvironment: LaunchServicing {
             directory: target.expandedPath,
             binaryPath: binaryPath
         )
-        try await open(command, in: terminal)
+        // The command is built here and nowhere else, so this is the only
+        // place the hook can record what a launch is about to run (KTD3).
+        HarnessJournal.shared.launchRequested(
+            target: target,
+            command: command,
+            agent: agent.id,
+            terminal: terminal.id,
+            preset: resolved.preset
+        )
+        do {
+            try await open(command, in: terminal)
+        } catch {
+            HarnessJournal.shared.launchResult(target: target, kind: "agent", error: error)
+            throw error
+        }
+        HarnessJournal.shared.launchResult(target: target, kind: "agent", error: nil)
     }
 
     func openTerminal(target: LaunchTarget, oneShot: Preset) async throws {
@@ -367,7 +405,24 @@ extension AppEnvironment: LaunchServicing {
         guard FileManager.default.fileExists(atPath: target.expandedPath) else {
             throw LaunchError.folderMissing(target.path)
         }
-        try await open(CommandBuilder.terminalOnly(directory: target.expandedPath), in: terminal)
+        // A plain terminal is a launch too (R5): the end state a scenario
+        // asserts is a terminal window on that folder, and it needs the same
+        // evidence as an agent session.
+        let command = CommandBuilder.terminalOnly(directory: target.expandedPath)
+        HarnessJournal.shared.launchRequested(
+            target: target,
+            command: command,
+            agent: nil,
+            terminal: terminal.id,
+            preset: resolved.preset
+        )
+        do {
+            try await open(command, in: terminal)
+        } catch {
+            HarnessJournal.shared.launchResult(target: target, kind: "terminal", error: error)
+            throw error
+        }
+        HarnessJournal.shared.launchResult(target: target, kind: "terminal", error: nil)
     }
 
     /// Everything that reads configuration stays on the main actor; the part
@@ -433,17 +488,27 @@ extension AppEnvironment: LaunchServicing {
 
     /// Which snapshot file to read comes from the agent's manifest, so a
     /// profile with no agent resolved simply has no readout (R25).
+    ///
+    /// Reads through `Overrides.resolveProfileDirectory` rather than
+    /// `profile.expandedConfigDirectory` directly: R3 forbids the app-fresh
+    /// tier from *reading* the maintainer's own Claude Code directories, not
+    /// only writing them, and a profile seeded with a `~`-prefixed
+    /// directory would otherwise read the real home's usage snapshot
+    /// regardless of `AGENTMENU_PROFILE_ROOT`.
     func usage(forProfile profile: Profile) -> UsageReading {
         guard let template = snapshotTemplate else { return .unavailable }
-        return usageReader.read(template: template, profileDirectory: profile.expandedConfigDirectory)
+        let directory = Overrides.resolveProfileDirectory(profile.configDirectory, profileRoot: overrides.profileRoot)
+        return usageReader.read(template: template, profileDirectory: directory)
     }
 
     /// The projection reads the history the status-line bridge appends to. No
     /// history, no projection — the same self-hiding rule as the readout, which
-    /// is why it needs no setting of its own.
+    /// is why it needs no setting of its own. Same profile-root routing as
+    /// `usage(forProfile:)`, for the same reason.
     func projector(forProfile profile: Profile) -> UsageProjector? {
         guard let template = snapshotTemplate else { return nil }
-        let url = UsageHistory.path(snapshotTemplate: template, profileDirectory: profile.expandedConfigDirectory)
+        let directory = Overrides.resolveProfileDirectory(profile.configDirectory, profileRoot: overrides.profileRoot)
+        let url = UsageHistory.path(snapshotTemplate: template, profileDirectory: directory)
         guard let history = UsageHistory.read(at: url) else { return nil }
         return UsageProjector(history: history)
     }

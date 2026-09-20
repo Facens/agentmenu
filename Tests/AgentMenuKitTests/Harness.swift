@@ -152,6 +152,21 @@ func repositoryRoot(file: StaticString = #filePath) -> URL {
         .deletingLastPathComponent()
 }
 
+/// Where `swift build` puts the CLI, resolved through `repositoryRoot(file:)`
+/// rather than the process's working directory (which `make test` may run
+/// from anywhere). Nil — and every CLI-level scenario skipped cleanly, never
+/// failed — when the binary has not been built yet.
+func agentMenuCLIBinary(file: StaticString = #filePath) -> String? {
+    let candidate = repositoryRoot(file: file).appendingPathComponent(".build/debug/AgentMenuCLI")
+    return FileManager.default.isExecutableFile(atPath: candidate.path) ? candidate.path : nil
+}
+
+struct CLIResult {
+    let status: Int32
+    let stdout: String
+    let stderr: String
+}
+
 /// Runs `executable` as a real subprocess and collects its result. `extra`
 /// is merged over the current process's environment, and `directory`, when
 /// given, becomes the child's working directory. Stdout and stderr are
@@ -189,4 +204,65 @@ func runProcess(
     let stderr = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
     process.waitUntilExit()
     return CLIResult(status: process.terminationStatus, stdout: stdout, stderr: stderr)
+}
+
+/// Runs the built CLI as a real subprocess — `AGENTMENU_CONFIG` in `env`
+/// points it at a `TempDir`'s `config.toml` rather than the maintainer's
+/// real one.
+func runCLI(_ binary: String, _ args: [String], env: [String: String] = [:], stdin: Data? = nil) throws -> CLIResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: binary)
+    process.arguments = args
+    var environment = ProcessInfo.processInfo.environment
+    for (key, value) in env { environment[key] = value }
+    process.environment = environment
+
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+    let stdinPipe = Pipe()
+    process.standardInput = stdinPipe
+
+    try process.run()
+
+    let writer = stdinPipe.fileHandleForWriting
+    DispatchQueue.global().async {
+        if let stdin { writer.write(stdin) }
+        try? writer.close()
+    }
+
+    let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+    let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+
+    return CLIResult(
+        status: process.terminationStatus,
+        stdout: String(data: outData, encoding: .utf8) ?? "",
+        stderr: String(data: errData, encoding: .utf8) ?? ""
+    )
+}
+
+/// Resolves a tool the harness scripts call by name, the way they resolve it
+/// themselves: from PATH, via `command -v`, not from a fixed location.
+///
+/// The hardcoded `/usr/bin/jq` this replaces passed on macOS 26, which ships
+/// jq there, and failed on the macos-14 CI runner, which does not — taking the
+/// whole suite with it, because the guard that found it missing returns before
+/// any test runs. harness/lib/common.sh's own `require_cmd jq` has always
+/// looked on PATH, so the fixed path was asserting something the harness never
+/// required.
+func toolOnPath(_ name: String) -> String? {
+    let which = Process()
+    which.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    which.arguments = ["sh", "-c", "command -v \(name)"]
+    let pipe = Pipe()
+    which.standardOutput = pipe
+    which.standardError = FileHandle.nullDevice
+    do { try which.run() } catch { return nil }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    which.waitUntilExit()
+    guard which.terminationStatus == 0 else { return nil }
+    let path = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    return path.isEmpty ? nil : path
 }

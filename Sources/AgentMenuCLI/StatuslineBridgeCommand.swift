@@ -8,7 +8,7 @@ import AgentMenuKit
 /// `agentmenu statusline-bridge --profile-dir <dir> [--chain <command>]`
 /// (R26, R47): what `install-statusline`'s two-line script execs on every
 /// status-line refresh. Hidden — kept out of `--help`; a person never types
-/// this by hand. Documented in `docs/migrating-from-cc-launcher.md`.
+/// this by hand.
 ///
 /// Reads Claude Code's `statusLine` stdin once, writes the rate-limit
 /// snapshot and hourly history `UsageReader`/`UsageHistory` read (throttled

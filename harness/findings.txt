@@ -1,0 +1,29 @@
+# The checked-in list of finding codes a scenario may record with
+# `finding <code>` (harness/lib/scenario.sh's own `finding()`). Once this
+# file exists, that function refuses any code not listed here — a scenario
+# bug, not a silent pass-through — because the redacted public report
+# (harness/lib/report.sh's `public` command) is built from these codes
+# alone and nothing unreviewed may reach it (KTD6).
+#
+# Format: one entry per line, "<code>: <fixed message>". The code is
+# everything up to the first colon and must match scenario.sh's own pattern
+# for a code, ^<code>([^A-Za-z0-9_.-]|$) — letters, digits, '.', '_', '-'
+# only, so a colon is always a safe separator. The message after the colon
+# is for a maintainer reading this file; it never reaches a public report,
+# which carries the bare code only.
+#
+# Blank lines and lines starting with '#' are comments.
+#
+# Adding a code here is a review action: it says the harness may report this
+# fact to a stranger's release without a human re-checking the sentence
+# every time. Renaming a code a scenario still calls turns every run of
+# that scenario into a harness error (exit 3) the moment this file no
+# longer lists it — that refusal is deliberate, not a bug to work around.
+
+# AgentMenu — harness/scenarios/agentmenu/
+no-usable-terminal: the vanilla first run reaches its launchable state with a configured folder but no enabled terminal (R21 — the shipped default, not a bug this harness fixes).
+no-usable-agent: the golden image's stand-in Claude Code binary was removed before first run, so setup found no usable agent to launch.
+
+# MeetingHop — meetinghop:harness/scenarios/meetinghop/
+no-calendar-accounts: calendar access was granted but Calendar.app has no accounts configured, so there is nothing to read.
+no-calendar-permission-prompt: MeetingHop v0.1.0 never asks for calendar access on a vanilla Mac — the menu tells the user to grant it in System Settings instead, so a stranger who installs it sees no prompt and an empty menu (R21 — reported, not fixed here).

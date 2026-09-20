@@ -69,5 +69,22 @@ contribution path and needs nothing from you.
   `// Copyright (c) 2026 Andrea Giannangelo` followed by
   `// SPDX-License-Identifier: GPL-3.0-or-later`. CI checks for exactly one
   SPDX line per file. Keep it.
+- Accessibility identifiers are part of a control's contract, not incidental
+  UI detail. The black-box test harness drives the built app by
+  `AXIdentifier` — never by coordinate, never by title, never by label text —
+  so every control a scenario clicks carries a stable `<surface>.<control>`
+  identifier from the one builder in
+  `Sources/AgentMenuKit/Support/AccessibilityID.swift`. Renaming or removing
+  one is a harness-facing change, on purpose: it should be as deliberate as
+  changing a public API. A dynamic identifier (a folder row, say) never
+  embeds a raw filesystem path, a username, a home directory, or any other
+  user-supplied free text — hash it instead, the way the folder builders
+  already do — because an `AXIdentifier` sits in the same accessibility tree
+  a screen reader walks, and a leaked automation log can capture it wholesale.
+  A profile id or an agent/terminal manifest id is the one exception: those
+  come from the config's own stable ids, not from user text, and are carried
+  verbatim. The one place identifiers deliberately do **not** appear is a
+  native `NSAlert` or SwiftUI `confirmationDialog` — those keep their button
+  titles as they are, and the harness matches on the title instead.
 - Conventional commit messages (`feat:`, `fix:`, `docs:`, …) are appreciated but
   not enforced.

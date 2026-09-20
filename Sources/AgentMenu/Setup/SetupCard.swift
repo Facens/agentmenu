@@ -21,6 +21,7 @@ struct SetupCard: View {
             HStack {
                 Button("Add another folder…") { model.chooseFolders() }
                     .controlSize(.small)
+                    .accessibilityIdentifier(AccessibilityID.Setup.addFolder)
                 Spacer()
                 Button("Done") {
                     model.finish()
@@ -29,6 +30,7 @@ struct SetupCard: View {
                 .controlSize(.small)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!model.hasProjectFolder)
+                .accessibilityIdentifier(AccessibilityID.Setup.done)
             }
             if !model.hasProjectFolder {
                 Text("Pick at least one folder you work in — a menu with only $HOME in it is not a launcher.")
@@ -59,6 +61,9 @@ struct SetupCard: View {
             }
 
             ForEach(model.detectedAgents.filter(\.found)) { hit in
+                // Two real controls on one line — the toggle and, once
+                // chosen, "make default" — so the row states its intent
+                // instead of collapsing into a single opaque element.
                 HStack(spacing: 7) {
                     Toggle("", isOn: Binding(
                         get: { model.isChosen(hit.manifest.id) },
@@ -66,6 +71,7 @@ struct SetupCard: View {
                     ))
                     .toggleStyle(.checkbox)
                     .labelsHidden()
+                    .accessibilityIdentifier(AccessibilityID.Setup.agentToggle(hit.manifest.id))
 
                     Text(hit.manifest.displayName).font(.system(size: 12))
                     if model.config.defaults.agent == hit.manifest.id {
@@ -77,12 +83,14 @@ struct SetupCard: View {
                             .buttonStyle(.plain)
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
+                            .accessibilityIdentifier(AccessibilityID.Setup.agentMakeDefault(hit.manifest.id))
                     }
                     if hit.manifest.unverified {
                         Text("unverified").font(.system(size: 10)).foregroundStyle(Color.brandWarning(scheme))
                     }
                     Spacer()
                 }
+                .accessibilityElement(children: .contain)
             }
 
             if !model.detecting, model.detectedAgents.allSatisfy({ !$0.found }) {
@@ -121,6 +129,7 @@ struct SetupCard: View {
                             .font(.system(size: 12))
                             .lineLimit(1)
                             .truncationMode(.head)
+                            .accessibilityIdentifier(AccessibilityID.Setup.folderToggle(path: path))
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

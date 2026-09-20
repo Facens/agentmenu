@@ -1,7 +1,7 @@
 # AgentMenu — builds with Command Line Tools only. No Xcode, no xcodebuild.
 SWIFT   ?= swift
 CONFIG  ?= release
-VERSION ?= 0.1.0
+VERSION ?= 0.0.0-alpha
 DIST    ?= dist
 
 .PHONY: all build test bundle run icons clean

@@ -93,6 +93,7 @@ struct UsageStrip: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel(window, state: state, age: age))
+        .accessibilityIdentifier(AccessibilityID.Popover.usageWindow(window.kind.rawValue))
     }
 
     /// A window the snapshot does not carry. Not zero, not stale — no
@@ -115,6 +116,7 @@ struct UsageStrip: View {
         .help("No current \(label(kind)) window: nothing has been spent since it last reset.")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(label(kind)): no current window")
+        .accessibilityIdentifier(AccessibilityID.Popover.usageWindow(kind.rawValue))
     }
 
     /// The burn-rate line: where each window is heading, not where it is.

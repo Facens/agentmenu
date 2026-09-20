@@ -49,14 +49,12 @@ func runResolve(_ args: [String], configStore: ConfigStore) -> Int32 {
     // The folder's own profile wins, then the global default's (KTD6's
     // preset merge — `config.defaults.profile` is part of that chain even
     // though nothing in the app reads it yet). Deliberately NOT falling
-    // through to `config.activeProfileID` here: an unpinned folder is
-    // exactly the case `claude-id` itself defers past folders.conf to its
-    // own map/default layers (`FoldersConfImport` leaves such a folder's
-    // profile nil on purpose, see its doc comment) — answering with
-    // whichever profile the popover happens to have active right now would
-    // reintroduce, from this resolver, the silent wrong-account failure
-    // mode `docs/migrating-from-cc-launcher.md` warns the migration itself
-    // can cause.
+    // through to `config.activeProfileID` here: an unpinned folder is one
+    // no profile has ever been recorded for. Answering with whichever
+    // profile the popover happens to have active right now would silently
+    // pick an account for a folder that was never configured to use it,
+    // turning "not configured" into a wrong-account launch instead of the
+    // honest failure this resolver otherwise reports.
     let pinnedProfileID = folder.preset.profile ?? config.defaults.profile
 
     switch mode {
@@ -164,11 +162,11 @@ private func resolveCommand(folder: FolderTarget, config: Config, profileID: Str
 /// point `resolve --command` at a scratch overlay directory instead of the
 /// maintainer's real `~/.config/agentmenu/agents/`. Not documented in
 /// `--help`, matching `AGENTMENU_CONFIG`'s own precedent.
+///
+/// Delegates to `Overrides.forCLI()` (U7) — see `resolvedConfigURL()` in
+/// main.swift for why this reader is unconditional.
 private func resolvedManifestUserRoot() -> URL {
-    if let override = ProcessInfo.processInfo.environment["AGENTMENU_MANIFESTS_USER_ROOT"], !override.isEmpty {
-        return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
-    }
-    return ManifestRegistry.defaultUserRoot
+    Overrides.forCLI().manifestsUserRoot ?? ManifestRegistry.defaultUserRoot
 }
 
 private func describeUnavailable(_ availability: Availability) -> String {

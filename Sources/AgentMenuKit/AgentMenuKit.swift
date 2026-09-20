@@ -108,5 +108,9 @@ public let agentMenuVersion: String = {
        let version = plist["CFBundleShortVersionString"] as? String {
         return version
     }
-    return "0.1.0-dev"
+    // No Info.plist found at all — running straight from `swift build`,
+    // outside any bundle. Not a real version; shaped as a valid alpha
+    // (ReleaseChannel(version:) accepts it) rather than an arbitrary literal
+    // a bundle could never actually produce.
+    return "0.0.0-alpha"
 }()

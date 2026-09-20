@@ -36,24 +36,32 @@ struct OverrideDisclosure: View {
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 8)
 
+            // `.contain`: five independent pickers plus, below, four action
+            // buttons live in this one panel — a scenario needs each on its
+            // own, not the panel folded into a single element.
             LazyVGrid(columns: columns, alignment: .leading, spacing: 7) {
                 if let values = options.model {
-                    control("Model", values: values, selection: $oneShot.model, inherited: effective.model)
+                    control("Model", values: values, selection: $oneShot.model, inherited: effective.model,
+                            id: AccessibilityID.Popover.overrideModel(target))
                 }
                 if let values = options.effort {
-                    control("Effort", values: values, selection: $oneShot.effort, inherited: effective.effort)
+                    control("Effort", values: values, selection: $oneShot.effort, inherited: effective.effort,
+                            id: AccessibilityID.Popover.overrideEffort(target))
                 }
                 if let values = options.permissionMode {
-                    control("Permission", values: values, selection: $oneShot.permissionMode, inherited: effective.permissionMode)
+                    control("Permission", values: values, selection: $oneShot.permissionMode, inherited: effective.permissionMode,
+                            id: AccessibilityID.Popover.overridePermission(target))
                 }
                 if let values = options.advisor {
                     advisorControl(values)
                 }
                 if !options.agents.isEmpty {
                     control("Agent", values: options.agents.map(\.id), selection: $oneShot.agent,
-                            inherited: effective.agent, names: Dictionary(uniqueKeysWithValues: options.agents.map { ($0.id, $0.name) }))
+                            inherited: effective.agent, names: Dictionary(uniqueKeysWithValues: options.agents.map { ($0.id, $0.name) }),
+                            id: AccessibilityID.Popover.overrideAgent(target))
                 }
             }
+            .accessibilityElement(children: .contain)
 
             HStack(spacing: 6) {
                 Button(action: launch) {
@@ -70,6 +78,7 @@ struct OverrideDisclosure: View {
                 )
                 .foregroundStyle(.white)
                 .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier(AccessibilityID.Popover.overrideLaunch(target))
 
                 Button(action: openTerminal) {
                     HStack(spacing: 5) {
@@ -86,6 +95,7 @@ struct OverrideDisclosure: View {
                         .shadow(color: .black.opacity(0.12), radius: 0.5, y: 0.5)
                 )
                 .help("Opens a terminal in this folder and starts no agent.")
+                .accessibilityIdentifier(AccessibilityID.Popover.overrideTerminal(target))
             }
             .padding(.top, 11)
 
@@ -95,8 +105,10 @@ struct OverrideDisclosure: View {
                     .help(target.kind == .folder
                           ? "Keep these values for this folder."
                           : "Only a configured folder has a preset to save to.")
+                    .accessibilityIdentifier(AccessibilityID.Popover.overrideSaveToFolder(target))
                 Button("Save as default…", action: saveAsDefault)
                     .help("Change the global default. Every folder that inherits follows it.")
+                    .accessibilityIdentifier(AccessibilityID.Popover.overrideSaveAsDefault(target))
             }
             .controlSize(.small)
             .buttonStyle(.bordered)
@@ -113,7 +125,8 @@ struct OverrideDisclosure: View {
         values: [String],
         selection: Binding<String?>,
         inherited: String?,
-        names: [String: String] = [:]
+        names: [String: String] = [:],
+        id: String
     ) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
@@ -128,6 +141,7 @@ struct OverrideDisclosure: View {
             }
             .labelsHidden()
             .controlSize(.small)
+            .accessibilityIdentifier(id)
         }
     }
 
@@ -149,6 +163,7 @@ struct OverrideDisclosure: View {
             }
             .labelsHidden()
             .controlSize(.small)
+            .accessibilityIdentifier(AccessibilityID.Popover.overrideAdvisor(target))
         }
     }
 

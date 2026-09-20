@@ -65,6 +65,7 @@ struct AgentsPane: View {
                 )
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11).monospaced())
+                .accessibilityIdentifier(AccessibilityID.Settings.Agents.path(agent.id))
                 Button("Find") {
                     if let resolved = resolveBinary(agent.binary) {
                         model.config.binaries[agent.binary] = resolved
@@ -80,13 +81,16 @@ struct AgentsPane: View {
                 .help(availability == .needsConfirmation
                       ? "Confirm this manifest first — it names the program that would be looked up."
                       : "Ask a login shell where this binary is.")
+                .accessibilityIdentifier(AccessibilityID.Settings.Agents.find(agent.id))
             }
 
             HStack(spacing: 14) {
                 Toggle("Enabled", isOn: enabledBinding(id: agent.id, keyPath: \.agentState, manifestDefault: agent.enabled))
+                    .accessibilityIdentifier(AccessibilityID.Settings.Agents.enabled(agent.id))
                 if agent.origin == .user {
                     Toggle("Trusted", isOn: trustedBinding(id: agent.id, keyPath: \.agentState))
                         .help("A manifest you wrote names the binary, the environment and the arguments that will run. Confirm it before it can be selected.")
+                        .accessibilityIdentifier(AccessibilityID.Settings.Agents.trusted(agent.id))
                 }
             }
             .controlSize(.small)
@@ -98,6 +102,7 @@ struct AgentsPane: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .accessibilityElement(children: .contain)
         .padding(.vertical, 2)
     }
 
@@ -115,13 +120,16 @@ struct AgentsPane: View {
             }
             HStack(spacing: 14) {
                 Toggle("Enabled", isOn: enabledBinding(id: terminal.id, keyPath: \.terminalState, manifestDefault: terminal.enabled))
+                    .accessibilityIdentifier(AccessibilityID.Settings.Terminals.enabled(terminal.id))
                 if terminal.origin == .user {
                     Toggle("Trusted", isOn: trustedBinding(id: terminal.id, keyPath: \.terminalState))
+                        .accessibilityIdentifier(AccessibilityID.Settings.Terminals.trusted(terminal.id))
                 }
             }
             .controlSize(.small)
             .toggleStyle(.checkbox)
         }
+        .accessibilityElement(children: .contain)
         .padding(.vertical, 2)
     }
 

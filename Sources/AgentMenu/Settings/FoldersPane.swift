@@ -49,7 +49,9 @@ struct FoldersPane: View {
         let tabs = model.accountTabs
         let picker = Picker("Account", selection: $model.folderAccountTab) {
             ForEach(tabs, id: \.self) { tab in
-                Text(model.accountTabTitle(tab)).tag(tab)
+                Text(model.accountTabTitle(tab))
+                    .tag(tab)
+                    .accessibilityIdentifier(AccessibilityID.Settings.Folders.accountTab(Self.tabID(tab)))
             }
         }
         .labelsHidden()
@@ -101,6 +103,7 @@ struct FoldersPane: View {
                     Image(systemName: "plus")
                 }
                 .help("Add a folder to this account")
+                .accessibilityIdentifier(AccessibilityID.Settings.Folders.add)
 
                 Button {
                     model.removeSelectedFolder()
@@ -109,6 +112,7 @@ struct FoldersPane: View {
                 }
                 .disabled(model.folderIndex == nil)
                 .help("Remove the selected folder")
+                .accessibilityIdentifier(AccessibilityID.Settings.Folders.remove)
 
                 Button {
                     model.duplicateSelectedFolder()
@@ -117,6 +121,7 @@ struct FoldersPane: View {
                 }
                 .disabled(model.folderIndex == nil)
                 .help("Add another entry for the same folder, preset and all")
+                .accessibilityIdentifier(AccessibilityID.Settings.Folders.duplicate)
 
                 Text("Drag to reorder. The order here is the order in the menu.")
                     .font(.system(size: 11))
@@ -157,6 +162,7 @@ struct FoldersPane: View {
                 .help(folder.path)
                 .layoutPriority(-1)
         }
+        .accessibilityIdentifier(AccessibilityID.Settings.Folders.row(folder))
     }
 
     // MARK: The detail form
@@ -177,6 +183,7 @@ struct FoldersPane: View {
         Form {
             Section {
                 TextField("Label", text: $model.config.folders[index].label)
+                    .accessibilityIdentifier(AccessibilityID.Settings.Folders.detailLabel)
                 LabeledContent("Folder") {
                     HStack {
                         Text(abbreviate(model.config.folders[index].path))
@@ -187,6 +194,7 @@ struct FoldersPane: View {
                         Button("Choose…") { chooseFolder(replacing: index) }
                             .controlSize(.small)
                             .fixedSize()
+                            .accessibilityIdentifier(AccessibilityID.Settings.Folders.detailChooseFolder)
                     }
                 }
                 // The inherit option is a real value, not a placeholder: an
@@ -212,6 +220,7 @@ struct FoldersPane: View {
                         Text(profile.name.isEmpty ? profile.id : profile.name).tag(String?.some(profile.id))
                     }
                 }
+                .accessibilityIdentifier(AccessibilityID.Settings.Folders.detailAccountPicker)
             }
             Section {
                 PresetEditor(
@@ -220,7 +229,11 @@ struct FoldersPane: View {
                     // capabilities are on offer here.
                     options: options(model.config.defaults.overlaid(with: model.config.folders[index].preset)),
                     inherited: model.config.defaults,
-                    showsTerminal: false
+                    showsTerminal: false,
+                    // Distinguishes this Model/Effort/… picker from the one
+                    // DefaultsPane shows for the same fields — one `Preset`
+                    // form, two identifier scopes.
+                    idScope: "folders.preset"
                 )
             } header: {
                 Text("Preset")
@@ -234,6 +247,17 @@ struct FoldersPane: View {
     }
 
     static let inheritedAccountLabel = "Follows the menu"
+
+    /// `SettingsModel.AccountTab` flattened to the string the identifier
+    /// builder wants — a profile id or the literal `"unassigned"`, never
+    /// free text, since a profile id is one of `Config.swift`'s own stable
+    /// ids (see the comment on `AccessibilityID.Settings.Folders.accountTab`).
+    private static func tabID(_ tab: SettingsModel.AccountTab) -> String {
+        switch tab {
+        case .profile(let id): return id
+        case .unassigned: return "unassigned"
+        }
+    }
 
     private func abbreviate(_ path: String) -> String { PathDisplay.abbreviated(path) }
 

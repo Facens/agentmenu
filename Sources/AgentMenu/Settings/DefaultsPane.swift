@@ -12,7 +12,8 @@ struct DefaultsPane: View {
     var body: some View {
         Form {
             Section {
-                PresetEditor(preset: $model.config.defaults, options: options(model.config.defaults), inherited: nil, showsTerminal: true)
+                PresetEditor(preset: $model.config.defaults, options: options(model.config.defaults), inherited: nil,
+                             showsTerminal: true, idScope: "defaults")
             } header: {
                 Text("Global default")
             } footer: {

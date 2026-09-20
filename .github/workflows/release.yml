@@ -7,8 +7,21 @@ name: Release
 # notarization is never the archive users download. Archive #1 exists only to
 # be submitted; the .app is stapled; archive #2 is what ships (KTD4).
 #
-# Tagging publishes a release. It does not publish an update: promotion into
-# the appcast is a separate, manually approved job (KTD15).
+# Tagging does not publish a release to users: the job below creates the
+# GitHub Release as a draft (KTD7), asset and all, invisible outside this
+# repository's collaborators. `harness/gate.sh run` proves the stranger tier
+# against that exact asset and attaches a redacted report; `harness/gate.sh
+# publish` is the maintainer's separate, deliberate act that makes it
+# current — see docs/releasing.md. Promotion into the appcast is a further,
+# separate, manually approved job on top of that (KTD15).
+#
+# A tag is either a beta (vX.Y.Z-beta.N) or a final version (vX.Y.Z) — see
+# packaging/version.sh for the grammar. Both build, sign and notarize exactly
+# the same way; only the release metadata differs. A beta publishes as a
+# GitHub pre-release and, once promoted, lands on Sparkle's beta update
+# channel (KTD10, as amended: beta tags are pre-releases on the beta update
+# channel). Alpha is never tagged — it's a local `make bundle` build — so the
+# workflow refuses one outright rather than shipping it.
 
 on:
   push:
@@ -33,16 +46,41 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: meta
-        name: Read the version from the tag
+        name: Read the version and channel from the tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          # KTD10: every tag is a final version, MAJOR.MINOR.PATCH. bundle.sh
-          # refuses anything else too; failing here says so before a build.
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::tag must be vMAJOR.MINOR.PATCH with no suffix, got $GITHUB_REF_NAME"
+          source packaging/version.sh
+          # bundle.sh runs this same check again once the build starts;
+          # failing here says so before anything is built.
+          CHANNEL="$(version_channel "$VERSION")" || { echo "::error::tag must be vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-beta.N, got $GITHUB_REF_NAME"; exit 1; }
+          # Alpha is never tagged — it's what `make bundle` produces locally
+          # with no VERSION set. A tag that parses as alpha means someone
+          # typed `vX.Y.Z-alpha`, not that this is a legitimate release form.
+          if [ "$CHANNEL" = alpha ]; then
+            echo "::error::alpha builds are local (make bundle); tag a beta or a final version"
             exit 1
           fi
+          # U19: a final is the verified beta under its final name — the same
+          # tree, built again. When betas of this version exist, the final
+          # tag has to sit on the commit of the highest one; a final cut from
+          # a different tree skips the beta channel entirely. HEAD, not
+          # GITHUB_SHA: for an annotated tag the latter can be the tag
+          # object, and the comparison is between commits.
+          if [ "$CHANNEL" = "stable" ]; then
+            git fetch --tags --quiet origin
+            LAST_BETA="$(git tag --list "v$VERSION-beta.*" | sort -t. -k4,4n | tail -n1)"
+            if [ -n "$LAST_BETA" ]; then
+              BETA_COMMIT="$(git rev-parse "$LAST_BETA^{commit}")"
+              HEAD_COMMIT="$(git rev-parse HEAD)"
+              if [ "$BETA_COMMIT" != "$HEAD_COMMIT" ]; then
+                echo "::error::$GITHUB_REF_NAME is on $HEAD_COMMIT but its last beta $LAST_BETA is on $BETA_COMMIT; a final is tagged on the commit of its last beta"
+                exit 1
+              fi
+              echo "$GITHUB_REF_NAME sits on the commit of $LAST_BETA"
+            fi
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
       # A tag is the one build users actually install, so it runs the suite
       # rather than trusting that CI ran on the commit it points at.
@@ -180,8 +218,17 @@ jobs:
             ${{ steps.archive.outputs.name }}
             ${{ steps.archive.outputs.name }}.sha256
           generate_release_notes: true
+          # KTD7: every release starts life as a draft. It stays one until
+          # `harness/gate.sh publish` flips it, after the stranger tier has
+          # run against this exact asset — see docs/releasing.md.
+          draft: true
+          # A beta tag publishes as a GitHub pre-release, which is also what
+          # marks it a beta to anyone browsing the Releases page.
+          prerelease: ${{ steps.meta.outputs.channel == 'beta' }}
           # R30: stated in every release's notes, ahead of the generated list.
+          # The first line appears only on a beta.
           body: |
+            ${{ steps.meta.outputs.channel == 'beta' && '**Beta release.** Published on the beta update channel; opt in from Settings once in-app updates ship, or install it by hand. The final release of this version will supersede it.' || '' }}
             **Apple Silicon only.** This build is arm64 and does not run on an Intel Mac.
 
             Download `${{ steps.archive.outputs.name }}`, unzip it, and move `AgentMenu.app` to `/Applications` before opening it. It is signed with a Developer ID and notarized, so it opens with no warning.

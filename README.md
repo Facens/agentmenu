@@ -46,6 +46,13 @@ moves that choice to launch time, where it belongs.
 The app is signed with a Developer ID and notarized, so it opens with no
 warning — no right-click dance, no trip through System Settings.
 
+**Betas.** Releases marked Pre-release on the
+[Releases page](https://github.com/Facens/agentmenu/releases) are betas —
+signed and notarized the same way as a final release, just published first,
+on the beta update channel. A final release supersedes the beta it followed.
+Install one by hand if you want a change early; once in-app updates ship, a
+Settings toggle will opt a copy into betas instead.
+
 ## What it does
 
 - **Launch targets:** folders you configure, the folder of the front Finder
@@ -140,16 +147,14 @@ just parked.
 ## There is no command-line tool
 
 Earlier versions of this README documented `agentmenu` as a typed command —
-resolving a folder's account from a shell script, importing an old launcher's
-list, installing the status-line bridge. That is reversed: nothing puts
-`agentmenu` on your `PATH`, and there is no supported way to type it yourself.
+resolving a folder's account from a shell script, installing the status-line
+bridge. That is reversed: nothing puts `agentmenu` on your `PATH`, and there
+is no supported way to type it yourself.
 
 The CLI at `Contents/Resources/bin/agentmenu`, inside the app bundle, still
 exists, but it is internal. The app invokes it itself — to install the
 status-line bridge — and the bridge script it writes invokes it again on every
-refresh. See
-[docs/migrating-from-cc-launcher.md](docs/migrating-from-cc-launcher.md) if
-you're coming from the old shell-based setup.
+refresh.
 
 ## Build from source
 
@@ -173,6 +178,77 @@ Gatekeeper anywhere else and cannot be notarized.
 The test suite is a plain executable target, not an XCTest bundle: neither
 XCTest nor swift-testing exists in a Command Line Tools install, and requiring
 Xcode to run the tests would make "no Xcode" true only for the maintainer.
+
+## Test surface
+
+A release is exercised on a clean machine before it ships, by a script that
+clicks the app rather than calling into it. A script cannot see what the app
+decided, only what it drew — so the app can be asked, at launch, to keep a
+journal of what it detected, what it is showing and what you chose. It is a
+read-only record: it performs no action and changes nothing about how the app
+behaves.
+
+**It is off, and only you can turn it on.** There is one switch, a preference
+key, and it names a file:
+
+```sh
+defaults write dev.facens.agentmenu harnessJournal journal.ndjson   # on
+defaults delete dev.facens.agentmenu harnessJournal                 # off
+```
+
+The value is a **file name, not a path**. AgentMenu writes it in one fixed
+place — `~/Library/Application Support/dev.facens.agentmenu/harness/` — and a
+value containing `/` or `..` is refused outright: nothing is written anywhere,
+and one line in the app's log is the only trace. The file is created at mode
+0600, is never written through a symbolic link, and is only ever appended to.
+
+Each line is one JSON object: a sequence number, a timestamp, the schema
+version, the build, and an event with its data. The events are the app's own
+decisions — `harness started`, `detecting started`, `detecting finished`,
+`setup shown`, `setup finished`, `launch requested`, `launch result`,
+`bridge installed`, `save failed` — and the values are the ones the popover
+was already showing you: the agents found on this machine, the folders
+suggested, the binary a launch resolved to, the folder it would run in, the
+model and effort. For a launch it records the **names** of the environment
+variables the command sets and never their values, and never the argument
+vector. No file contents, no credentials, nothing you could not read off the
+screen.
+
+Three more things worth knowing before you switch it on:
+
+- **It stops growing.** The journal is capped at 1 MiB; past that, the oldest
+  lines are dropped to make room for the newest. A single value longer than
+  512 characters is shortened, so one long error message cannot push a run's
+  own history out of the file.
+- **It cleans up after itself.** Launch AgentMenu with the key unset and any
+  journal left in that directory is deleted. Files in there that are not
+  journals are left alone.
+- **It is readable by anything running as you.** The directory carries no
+  secret and confinement is not the point — any process that could read it
+  could also have set the key in the first place. The point is that the app
+  writes nothing outside that one directory.
+
+**Nothing listens.** There is no socket, no port and no network traffic; the
+journal is a file, and the only way to read it is to read it.
+
+**Every control this exercises carries a stable accessibility identifier.**
+The harness drives the built app by `AXIdentifier` alone — never a
+coordinate, never a label — so the same identifiers a screen reader would
+see are also what the script clicks. They're part of the app's contract with
+that script, not incidental UI detail; see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the rule.
+
+**Every release carries the redacted result of a real run.** Before a
+release is presented as current, this exact asset — the same zip you'd
+download — is installed and driven through every scenario on a vanilla
+macOS VM that never saw this machine before, and the release carries the
+result: `report.public.json`, attached to it on GitHub. It holds a verdict,
+a list of finding codes, the asset's SHA-256, which build of the golden
+image it ran against (the macOS and Claude Code versions, and when it was
+built), the scenario names, and a run id — and nothing else. No value in it
+may contain a `/`, so no screenshot, no host path and no hostname ever
+reaches it, and a finding is always one of a fixed, published set of codes,
+never free text.
 
 ## Contributing
 

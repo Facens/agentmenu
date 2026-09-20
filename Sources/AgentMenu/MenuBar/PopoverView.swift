@@ -66,6 +66,7 @@ struct PopoverView: View {
             }
             .buttonStyle(.plain)
             .help("Open AgentMenu settings")
+            .accessibilityIdentifier(AccessibilityID.Popover.gear)
         }
         .padding(.horizontal, 12)
         .padding(.top, 11)
@@ -81,7 +82,20 @@ struct PopoverView: View {
                 set: { model.setActiveProfile($0) }
             )) {
                 ForEach(model.config.profiles, id: \.id) { profile in
-                    Text(profile.name.isEmpty ? profile.id : profile.name).tag(profile.id)
+                    // Applied to the label rather than to the Picker as a
+                    // whole, on the theory that a segmented control turns
+                    // each option into its own AX element and the label
+                    // inside it is what carries the identifier through to
+                    // that segment — unverified: this is exactly the kind of
+                    // question the deferred probe (U5's "Execution note")
+                    // answers on the built app, not something a typecheck
+                    // can confirm. If the probe finds this does not reach
+                    // System Events, `.menu` style (the >3-profile case just
+                    // below) is the more likely one to work, since it is a
+                    // real NSMenu with real NSMenuItems.
+                    Text(profile.name.isEmpty ? profile.id : profile.name)
+                        .tag(profile.id)
+                        .accessibilityIdentifier(AccessibilityID.Popover.profile(profile.id))
                 }
             }
             .labelsHidden()
@@ -137,6 +151,9 @@ struct PopoverView: View {
     }
 
     private func targetCard(_ target: LaunchTarget) -> some View {
+        // Only ever called for the Finder target (see `finderRow` below) — a
+        // second real row, outside the `FolderRow` list, with the same two
+        // controls a scenario needs from any row: launch and expand.
         VStack(spacing: 0) {
             HStack(spacing: 9) {
                 Image(systemName: "folder")
@@ -159,6 +176,7 @@ struct PopoverView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(AccessibilityID.Popover.rowLaunch(target))
                 if model.state(for: target).bypasses {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 11))
@@ -173,7 +191,9 @@ struct PopoverView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(AccessibilityID.Popover.rowExpand(target))
             }
+            .accessibilityElement(children: .contain)
             .padding(.horizontal, 10)
             .frame(height: 34)
 

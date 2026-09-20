@@ -9,21 +9,25 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.0.0-alpha}"
 CONFIG="${CONFIG:-release}"
 DIST="${DIST:-$ROOT/dist}"
 APP="$DIST/AgentMenu.app"
 
-# R20 / KTD10: one placeholder feeds both CFBundleShortVersionString and
-# CFBundleVersion, so the version has to satisfy the stricter of the two —
-# CFBundleVersion is what Sparkle orders updates by, numerically. Dotted digits
-# only, validated before anything is built: there are no pre-release tags, so
-# there is nothing to strip, and a malformed version fails here instead of
-# stamping a build number no client could order.
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "error: VERSION must be MAJOR.MINOR.PATCH, digits only (got '$VERSION')" >&2
-    exit 1
-fi
+# R20 / KTD10 (as amended): three release channels share one version grammar —
+# stable (MAJOR.MINOR.PATCH), beta (MAJOR.MINOR.PATCH-beta.N) and alpha
+# (MAJOR.MINOR.PATCH-alpha), see packaging/version.sh for the table. The two
+# Info.plist version keys can no longer share one placeholder, because
+# Sparkle's comparator (SUStandardVersionComparator) stops reading at the
+# first "-", so 0.2.0-beta.1 and 0.2.0 would tie and a beta install could
+# never be offered the final. CFBundleShortVersionString stays the human
+# string, as written; CFBundleVersion is derived — the same three components
+# plus a fourth that breaks the tie and keeps the sequence monotonic. Both are
+# validated and derived here, before anything is built, so a malformed
+# version fails before it can stamp a build number no client could order.
+source "$ROOT/packaging/version.sh"
+CHANNEL="$(version_channel "$VERSION")" || exit 1
+BUILD="$(version_build "$VERSION")" || exit 1
 
 cd "$ROOT"
 swift build -c "$CONFIG" --product AgentMenu
@@ -49,7 +53,7 @@ cp "$ROOT/dist/icon/menubar/"MenuBarIconTemplate*.png "$APP/Contents/Resources/"
 cp -R "$ROOT/Resources/agents" "$APP/Contents/Resources/agents"
 cp -R "$ROOT/Resources/terminals" "$APP/Contents/Resources/terminals"
 
-sed "s/__VERSION__/$VERSION/g" "$ROOT/packaging/Info.plist" > "$APP/Contents/Info.plist"
+sed -e "s/__VERSION__/$VERSION/g" -e "s/__BUILD__/$BUILD/g" "$ROOT/packaging/Info.plist" > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # ---------------------------------------------------------------------------
@@ -108,7 +112,7 @@ case "$SIGN_ID" in
 esac
 
 if [ "$SIGN_ID" = "-" ]; then
-    echo "built $APP (version $VERSION, AD-HOC signed — not a release)"
+    echo "built $APP (version $VERSION, channel $CHANNEL, AD-HOC signed — not a release)"
 else
-    echo "built $APP (version $VERSION, signed by $SIGN_ID)"
+    echo "built $APP (version $VERSION, channel $CHANNEL, signed by $SIGN_ID)"
 fi

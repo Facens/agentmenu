@@ -56,6 +56,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             button.toolTip = "AgentMenu — start an agent session"
             button.action = #selector(toggle)
             button.target = self
+            // U5/KTD9: the one control System Events has to find before it can
+            // find anything else the app draws — nothing is reachable until
+            // this button is clicked open.
+            button.setAccessibilityIdentifier(AccessibilityID.Popover.statusItem)
         }
 
         refreshIndicator()
@@ -80,13 +84,21 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         popover.behavior = .applicationDefined   // dismissal is ours, see below
         popover.animates = false                 // a menu-bar popover should feel instant
         popover.delegate = self
-        popover.contentViewController = NSHostingController(
+        let popoverContent = NSHostingController(
             rootView: PopoverView(
                 model: environment.popover,
                 setup: environment.setup,
                 close: { [weak self] in self?.close() }
             )
         )
+        // The plan's execution note flags this as the unit's real risk: an
+        // NSPopover's content sits in a window System Events may or may not
+        // address the way a normal document window does. Setting the
+        // identifier here is what the deferred probe (U5's "Execution note")
+        // checks against a running app; wiring it now leaves that probe
+        // something to find rather than nothing.
+        popoverContent.view.setAccessibilityIdentifier(AccessibilityID.Popover.container)
+        popover.contentViewController = popoverContent
 
         // `.applicationDefined` hands every dismissal to us, and switching away
         // with Cmd-Tab is one: without this the popover floats over whatever

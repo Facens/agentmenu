@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import AppKit
+import Foundation
 import SwiftUI
 import AgentMenuKit
 
@@ -23,6 +24,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Defaults first: a launcher that shows only $HOME until a wizard is
         // finished is a blank page, and the window can be closed.
         environment.seedIfMissing()
+        // The read-only state hook (KTD3, R13). Inert unless a defaults key
+        // names a journal file, and after the seeding above so the fixture
+        // echo carries the configuration this launch actually ended up with —
+        // a failure to write it is replayed to the tap either way.
+        //
+        // `environment.overrides` is what `AppEnvironment.init` already
+        // resolved from the argument domain and the environment (U7, KTD4) —
+        // read back here rather than re-resolved, so the roots the journal
+        // echoes can never disagree with the roots the store and the
+        // manifest registry actually used.
+        let overrides = environment.overrides
+        HarnessJournal.shared.activate(
+            environment: environment,
+            defaults: Overrides.defaults(forSuite: overrides.defaultsSuite),
+            directory: overrides.harnessDirectory ?? Journal.defaultDirectory,
+            defaultsSuite: overrides.defaultsSuite,
+            manifestsRoot: overrides.manifestsUserRoot ?? ManifestRegistry.defaultUserRoot,
+            profileRoot: overrides.profileRoot
+        )
         statusItem = StatusItemController(environment: environment)
         // Pay the Apple Event setup cost now rather than on the first click.
         FinderTarget.warmUp()

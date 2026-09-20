@@ -73,11 +73,26 @@ enum Detection {
     /// one person's arrangement, not a concept the app should impose on
     /// everyone. Most machines have exactly one, and then there is nothing to
     /// ask and no switch to show (R16).
+    ///
+    /// `profileRoot` is the app-fresh tier's isolated stand-in for the home
+    /// directory (KTD4). R3 forbids the harness from so much as reading the
+    /// maintainer's own `~/.claude*`, and seeding is where the app would
+    /// otherwise go looking: a `HOME` override does not reach
+    /// `homeDirectoryForCurrentUser`, so the root arrives explicitly. When it
+    /// is set the profiles it finds carry absolute directories, which is what
+    /// KTD4 says the harness seeds and what keeps every later consumer — the
+    /// `CLAUDE_CONFIG_DIR` a launch sets, the status-line bridge install, the
+    /// journal's fixture echo — inside the isolated root without each of them
+    /// having to know the override exists.
     static func profiles(
         for agent: AgentManifest?,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        profileRoot: URL? = nil
     ) -> [Profile] {
-        let home = fileManager.homeDirectoryForCurrentUser
+        let home = profileRoot ?? fileManager.homeDirectoryForCurrentUser
+        let directory: (String) -> String = { leaf in
+            profileRoot == nil ? "~/" + leaf : home.appendingPathComponent(leaf).path
+        }
         // Where an agent keeps its configuration is not in the manifest, and
         // guessing from a display name is worse than guessing from the id: the
         // id is what the manifest author controls. `claude-code` keeps
@@ -85,7 +100,7 @@ enum Detection {
         let defaultLeaf = agent.map { "." + ($0.id.split(separator: "-").first.map(String.init) ?? $0.id) } ?? ".claude"
 
         guard let entries = try? fileManager.contentsOfDirectory(atPath: home.path) else {
-            return [Profile(id: "default", name: "Default", configDirectory: "~/\(defaultLeaf)")]
+            return [Profile(id: "default", name: "Default", configDirectory: directory(defaultLeaf))]
         }
 
         var found: [Profile] = []
@@ -95,11 +110,11 @@ enum Detection {
                   isDirectory.boolValue else { continue }
             let suffix = leaf == defaultLeaf ? "" : String(leaf.dropFirst(defaultLeaf.count + 1))
             let id = suffix.isEmpty ? "default" : suffix
-            found.append(Profile(id: id, name: displayName(for: id), configDirectory: "~/\(leaf)"))
+            found.append(Profile(id: id, name: displayName(for: id), configDirectory: directory(leaf)))
         }
 
         return found.isEmpty
-            ? [Profile(id: "default", name: "Default", configDirectory: "~/\(defaultLeaf)")]
+            ? [Profile(id: "default", name: "Default", configDirectory: directory(defaultLeaf))]
             : found
     }
 
@@ -107,12 +122,6 @@ enum Detection {
     /// app decided they belong to.
     private static func displayName(for id: String) -> String {
         id == "default" ? "Default" : id.prefix(1).uppercased() + id.dropFirst()
-    }
-
-    /// Whether the launcher this app replaces left a list worth importing.
-    /// Nobody else has this file, so nobody else should be asked about it.
-    static func foldersConfExists(fileManager: FileManager = .default) -> Bool {
-        fileManager.fileExists(atPath: NSString(string: FoldersConfImport.defaultSourcePath).expandingTildeInPath)
     }
 
     /// R11: model and advisor read once from the agent's own settings file, so

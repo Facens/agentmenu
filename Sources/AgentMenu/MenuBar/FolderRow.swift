@@ -47,6 +47,10 @@ struct FolderRow: View {
     @StateObject private var hover = HoverState()
 
     var body: some View {
+        // `.contain`, not the default: this row carries several real controls
+        // — launch, the model and effort pills, the reorder handle, the
+        // chevron — and each needs its own AXIdentifier reachable on its own,
+        // not folded into one element that only the row's label describes.
         HStack(spacing: 6) {
             Button(action: launch) {
                 HStack(spacing: 8) {
@@ -88,6 +92,7 @@ struct FolderRow: View {
             }
             .buttonStyle(.plain)
             .help("Launch an agent session in \(target.path)")
+            .accessibilityIdentifier(AccessibilityID.Popover.rowLaunch(target))
 
             if bypasses {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -101,6 +106,7 @@ struct FolderRow: View {
                      current: effective.model,
                      isOverride: overridden.contains(.model),
                      label: "Model",
+                     id: AccessibilityID.Popover.rowModel(target),
                      set: setModel)
             }
             if let values = options.effort {
@@ -108,6 +114,7 @@ struct FolderRow: View {
                      current: effective.effort,
                      isOverride: overridden.contains(.effort),
                      label: "Effort",
+                     id: AccessibilityID.Popover.rowEffort(target),
                      set: setEffort)
             }
 
@@ -138,6 +145,7 @@ struct FolderRow: View {
                     .contentShape(Rectangle())
                     .opacity(hover.hovering ? 1 : 0)
                     .help("Drag to reorder. The order here is the order you set.")
+                    .accessibilityIdentifier(AccessibilityID.Popover.rowReorder(target))
                     .draggable(folderID) {
                         Text(target.label)
                             .font(.system(size: 12))
@@ -156,7 +164,9 @@ struct FolderRow: View {
             }
             .buttonStyle(.plain)
             .help(isExpanded ? "Hide the launch options" : "Show every launch option for this target")
+            .accessibilityIdentifier(AccessibilityID.Popover.rowExpand(target))
         }
+        .accessibilityElement(children: .contain)
         .padding(.leading, 10)
         .padding(.trailing, 6)
         .frame(height: 30)
@@ -174,6 +184,7 @@ struct FolderRow: View {
         current: String?,
         isOverride: Bool,
         label: String,
+        id: String,
         set: @escaping (String?) -> Void
     ) -> some View {
         Menu {
@@ -201,6 +212,7 @@ struct FolderRow: View {
         // Shown, not hidden. These are menus that look exactly like the labels
         // beside them, and `.hidden` left nothing at all to say they open.
         .menuIndicator(.visible)
+        .accessibilityIdentifier(id)
         .fixedSize()
         .padding(.horizontal, 5)
         .padding(.vertical, 1)

@@ -21,19 +21,35 @@ struct SettingsWindow: View {
     let resolveBinary: (String) -> String?
 
     var body: some View {
+        // The identifier goes on the `Label` inside `.tabItem`, not on the
+        // pane, because that is what a click has to land on to switch tabs.
+        // It deliberately does NOT also go on the pane's own content: only
+        // the selected tab's pane is in the tree at a time, so tagging both
+        // the tab button and its pane with the same string would put two
+        // elements under one identifier the moment that tab is showing.
+        // Whether AppKit's tab control exposes the `Label`'s identifier at
+        // all is unverified — the same open question as the profile switch's
+        // per-segment labels in `PopoverView.swift`, and one more thing the
+        // deferred probe (U5's "Execution note") has to answer on the built
+        // app before U9 can rely on it.
         TabView {
             FoldersPane(model: model, options: options)
-                .tabItem { Label("Folders", systemImage: "folder") }
+                .tabItem { tabLabel("Folders", "folder", "folders") }
             DefaultsPane(model: model, options: options)
-                .tabItem { Label("Defaults", systemImage: "slider.horizontal.3") }
+                .tabItem { tabLabel("Defaults", "slider.horizontal.3", "defaults") }
             ProfilesPane(model: model)
-                .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
+                .tabItem { tabLabel("Accounts", "person.crop.circle", "accounts") }
             AgentsPane(model: model, registry: registry, resolveBinary: resolveBinary)
-                .tabItem { Label("Agents", systemImage: "terminal") }
+                .tabItem { tabLabel("Agents", "terminal", "agents") }
         }
         // A minimum, not a size. The panes hold paths, and a path under
         // CloudStorage is longer than any width chosen up front — a window
         // that cannot grow turns that into a clipped label with nowhere to go.
         .frame(minWidth: 720, minHeight: 560)
+    }
+
+    private func tabLabel(_ title: String, _ systemImage: String, _ name: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .accessibilityIdentifier(AccessibilityID.Settings.tab(name))
     }
 }

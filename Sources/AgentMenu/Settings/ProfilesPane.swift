@@ -44,11 +44,13 @@ struct ProfilesPane: View {
             HStack(spacing: 6) {
                 Button { model.addProfile() } label: { Image(systemName: "plus") }
                     .help("Add an account")
+                    .accessibilityIdentifier(AccessibilityID.Settings.Accounts.add)
                 Button {
                     if let id = model.selectedProfile { model.removeProfile(id: id) }
                 } label: { Image(systemName: "minus") }
                     .disabled(model.selectedProfile == nil || model.config.profiles.count < 2)
                     .help("Remove the selected account. Folders on it move to the first remaining one.")
+                    .accessibilityIdentifier(AccessibilityID.Settings.Accounts.remove)
                 Spacer()
             }
             .controlSize(.small)
@@ -59,6 +61,7 @@ struct ProfilesPane: View {
         Form {
             Section {
                 TextField("Name", text: $model.config.profiles[index].name)
+                    .accessibilityIdentifier(AccessibilityID.Settings.Accounts.name)
                 LabeledContent("Configuration directory") {
                     HStack {
                         Text(model.config.profiles[index].configDirectory)
@@ -69,6 +72,7 @@ struct ProfilesPane: View {
                         Button("Choose…") { chooseDirectory(index: index) }
                             .controlSize(.small)
                             .fixedSize()
+                            .accessibilityIdentifier(AccessibilityID.Settings.Accounts.chooseDirectory)
                     }
                 }
                 LabeledContent("Identifier") {
@@ -90,6 +94,7 @@ struct ProfilesPane: View {
                     Button("Install status-line bridge…") { installBridge(index: index) }
                         .controlSize(.small)
                         .fixedSize()
+                        .accessibilityIdentifier(AccessibilityID.Settings.Accounts.installBridge)
                 }
                 if let report = model.bridgeInstallReport[model.config.profiles[index].id] {
                     Text(report)

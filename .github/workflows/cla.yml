@@ -41,6 +41,16 @@ permissions: {}
 
 jobs:
   cla:
+    # The grant is a precondition for OUTSIDE contributions (R35), and those
+    # only ever arrive on the public repository. This file is synced there by
+    # packaging/publish-public.sh (.github is not in publish-exclude.txt), so
+    # it is one file serving both repos and the condition, not a deletion, is
+    # what keeps it off the private one. On agentmenu-dev the only committer
+    # is the maintainer, pushing through their own pull requests; running the
+    # check there fails every one of them -- the signatures branch does not
+    # exist, and every commit carries a Co-Authored-By trailer the action
+    # counts as a committer and the allowlist does not name.
+    if: github.repository == 'Facens/agentmenu'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # to record the signature on the cla-signatures branch

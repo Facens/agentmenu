@@ -3,6 +3,7 @@
 
 import AppKit
 import SwiftUI
+import AgentMenuKit
 
 /// The settings window, owned by this app rather than by a SwiftUI scene.
 ///
@@ -41,6 +42,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.delegate = self
             window.setContentSize(NSSize(width: 720, height: 560))
             window.center()
+            // The window System Events has to find before it can find any
+            // pane inside it (KTD9).
+            window.setAccessibilityIdentifier(AccessibilityID.Settings.window)
             self.window = window
         }
         NSApp.setActivationPolicy(.regular)

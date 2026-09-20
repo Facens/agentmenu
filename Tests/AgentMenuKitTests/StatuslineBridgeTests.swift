@@ -24,7 +24,7 @@ func runStatuslineBridgeTests(_ t: TestRunner) {
 /// hang (findings #4, #5) fails this test instead of wedging `make test`
 /// forever — this test target has no per-test timeout of its own.
 ///
-/// Deliberately does NOT reuse `runCLI` (ImportTests.swift): same Pipe-based
+/// Deliberately does NOT reuse `runCLI` (Harness.swift): same Pipe-based
 /// stdout/stderr and background stdin write, just with the bound added. Real
 /// pipes are the point, not a workaround — an earlier version of this
 /// helper redirected the CLI's own stdout to a temp file, which turned out
