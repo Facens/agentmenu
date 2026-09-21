@@ -106,6 +106,7 @@ enum ConfigCodec {
         config.activeProfileID = root["active_profile"]?.stringValue
         config.firstRunCompleted = root["first_run_completed"]?.boolValue ?? false
         config.defaults = decodePreset(root["defaults"]?.tableValue ?? TOMLTable())
+        config.betaUpdates = root["updates"]?.tableValue?["beta"]?.boolValue
 
         if let profilesArray = root["profiles"]?.arrayValue {
             config.profiles = try profilesArray.map { value in
@@ -229,6 +230,20 @@ enum ConfigCodec {
         var defaultsTable = root["defaults"]?.tableValue ?? TOMLTable()
         encodePreset(config.defaults, into: &defaultsTable)
         setOrRemoveTable(&root, "defaults", defaultsTable)
+
+        // Written once the user has said either way, and absent until then
+        // — the file records a decision, not a derived default, so a fresh
+        // config carries no `[updates]` section at all and a beta build's
+        // on-by-default behaviour stays a property of the build rather than
+        // of the file (KTD20). `setOrRemoveTable` drops the section when the
+        // key goes.
+        var updatesTable = root["updates"]?.tableValue ?? TOMLTable()
+        if let beta = config.betaUpdates {
+            updatesTable.set(.boolean(beta), at: ["beta"])
+        } else {
+            updatesTable.removeValue(forKey: "beta")
+        }
+        setOrRemoveTable(&root, "updates", updatesTable)
 
         if config.profiles.isEmpty {
             root.removeValue(forKey: "profiles")

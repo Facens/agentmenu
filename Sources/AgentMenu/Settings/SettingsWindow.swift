@@ -41,6 +41,10 @@ struct SettingsWindow: View {
                 .tabItem { tabLabel("Accounts", "person.crop.circle", "accounts") }
             AgentsPane(model: model, registry: registry, resolveBinary: resolveBinary)
                 .tabItem { tabLabel("Agents", "terminal", "agents") }
+            // Last, not first: updates are the tab a user opens twice a
+            // year, and the panes before it are the ones they came for.
+            GeneralPane(model: model)
+                .tabItem { tabLabel("General", "gearshape", "general") }
         }
         // A minimum, not a size. The panes hold paths, and a path under
         // CloudStorage is longer than any width chosen up front — a window

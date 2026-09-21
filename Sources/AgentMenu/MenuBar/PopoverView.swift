@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Andrea Giannangelo
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import AppKit
 import SwiftUI
 import AgentMenuKit
 
@@ -25,6 +26,13 @@ struct PopoverView: View {
             header
             profileSwitch
             usage
+            // In the fixed chrome, above the scrolling list, and not
+            // dismissible: it is the reason updates are silently not
+            // arriving, and a banner the user can close is a banner they
+            // close once and never think about again (R26).
+            if model.isTranslocated {
+                translocationBanner
+            }
             finderRow
             if setup.isNeeded {
                 SetupCard(model: setup, done: {})
@@ -350,12 +358,57 @@ struct PopoverView: View {
         )
     }
 
+    /// The app is running from Gatekeeper's randomized read-only copy.
+    /// Naming the fix rather than the symptom: "move it to Applications" is
+    /// the whole remedy, and it is the same sentence the README opens with.
+    private var translocationBanner: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text("AgentMenu is running from a temporary copy. Move it to your Applications folder — until you do, it cannot update itself and the status-line bridge cannot be installed.")
+                .font(.system(size: 11))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .accessibilityIdentifier(AccessibilityID.Popover.translocationBanner)
+    }
+
     private var footer: some View {
         HStack(spacing: 10) {
             Text("AgentMenu \(agentMenuVersion)")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
+            // R13: the manual check, beside the version it would replace.
+            // Sparkle's own window opening over this popover does not
+            // dismiss it — the popover is .applicationDefined, which is
+            // also why AgentMenu can carry menus inside it.
+            if model.canCheckForUpdates {
+                Button(model.updatePending ? "Install Update…" : "Check for Updates") {
+                    model.checkForUpdates()
+                }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+                .accessibilityIdentifier(AccessibilityID.Popover.checkForUpdates)
+            }
+            // The plan's footer has carried "Settings, Quit" since the
+            // layout diagram, and the mockup puts Quit here, rightmost.
+            // Without it an accessory app has no way out at all: no Dock
+            // icon to right-click, no main menu, so no Cmd-Q — only Force
+            // Quit or Activity Monitor.
+            //
+            // `NSApp.terminate` rather than `exit`: termination is what
+            // runs `applicationWillTerminate`, and that is where the
+            // pending save is flushed. A preset changed a moment before
+            // this click is at most 0.4 s from being written, and exiting
+            // under it would lose the change silently.
+            Button("Quit") { NSApp.terminate(nil) }
+                .buttonStyle(.link)
+                .font(.system(size: 11))
+                .help("Quit AgentMenu")
+                .accessibilityIdentifier(AccessibilityID.Popover.quit)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)

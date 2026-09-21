@@ -45,21 +45,21 @@ func runHarnessFixtureTests(_ t: TestRunner) {
         return
     }
 
-    hf_testShellFilesParseAndAreExecutable(t, harnessDir: harnessDir, fixturesDir: fixturesDir, scenariosDir: scenariosDir)
-    hf_testScenariosAreStrangerOnly(t, scenariosDir: scenariosDir)
-    hf_testFixtureFilesAreSynthetic(t, fixturesDir: fixturesDir)
-    hf_testScenarioClicksNameKnownIdentifiers(t, scenariosDir: scenariosDir)
-    hf_testPathHash(t, harnessDir: harnessDir)
-    hf_testFirstRunFixture(t, harnessDir: harnessDir)
-    hf_testConfiguredTerminalFixture(t, harnessDir: harnessDir)
-    hf_testConfiguredProfileFixture(t, harnessDir: harnessDir)
+    hfix_testShellFilesParseAndAreExecutable(t, harnessDir: harnessDir, fixturesDir: fixturesDir, scenariosDir: scenariosDir)
+    hfix_testScenariosAreStrangerOnly(t, scenariosDir: scenariosDir)
+    hfix_testFixtureFilesAreSynthetic(t, fixturesDir: fixturesDir)
+    hfix_testScenarioClicksNameKnownIdentifiers(t, scenariosDir: scenariosDir)
+    hfix_testPathHash(t, harnessDir: harnessDir)
+    hfix_testFirstRunFixture(t, harnessDir: harnessDir)
+    hfix_testConfiguredTerminalFixture(t, harnessDir: harnessDir)
+    hfix_testConfiguredProfileFixture(t, harnessDir: harnessDir)
 }
 
 // MARK: - Every new shell file parses under `bash -n`, and every apply.sh /
 // scenario is executable. Mirrors HarnessScenarioTests.swift's own
 // `hs_testSyntaxAndSmokeFiles`.
 
-private func hf_testShellFilesParseAndAreExecutable(
+private func hfix_testShellFilesParseAndAreExecutable(
     _ t: TestRunner, harnessDir: URL, fixturesDir: URL, scenariosDir: URL
 ) {
     var files: [String] = [
@@ -69,7 +69,7 @@ private func hf_testShellFilesParseAndAreExecutable(
     for fixture in ["first-run", "configured-terminal", "configured-profile"] {
         files.append(fixturesDir.appendingPathComponent("\(fixture)/apply.sh").path)
     }
-    for scenario in hf_scenarioNames {
+    for scenario in hfix_scenarioNames {
         files.append(scenariosDir.appendingPathComponent("\(scenario).sh").path)
     }
 
@@ -85,7 +85,7 @@ private func hf_testShellFilesParseAndAreExecutable(
 }
 
 /// The seven R9 scenario names, in the same order the plan lists them.
-private let hf_scenarioNames = [
+private let hfix_scenarioNames = [
     "vanilla-first-run",
     "launch-terminal",
     "no-agent",
@@ -100,8 +100,8 @@ private let hf_scenarioNames = [
 // (`grep -q '^# HARNESS_STRANGER_ONLY'`) before it will refuse a scenario
 // on the app-fresh tier.
 
-private func hf_testScenariosAreStrangerOnly(_ t: TestRunner, scenariosDir: URL) {
-    for scenario in hf_scenarioNames {
+private func hfix_testScenariosAreStrangerOnly(_ t: TestRunner, scenariosDir: URL) {
+    for scenario in hfix_scenarioNames {
         let path = scenariosDir.appendingPathComponent("\(scenario).sh").path
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
             t.expect(false, "could not read \(path)")
@@ -116,7 +116,7 @@ private func hf_testScenariosAreStrangerOnly(_ t: TestRunner, scenariosDir: URL)
 // MARK: - Every fixture file is synthetic: none may contain the
 // maintainer's own username or home directory.
 
-private func hf_testFixtureFilesAreSynthetic(_ t: TestRunner, fixturesDir: URL) {
+private func hfix_testFixtureFilesAreSynthetic(_ t: TestRunner, fixturesDir: URL) {
     let realUsername = NSUserName()
     let realHome = FileManager.default.homeDirectoryForCurrentUser.path
 
@@ -171,7 +171,7 @@ private func hf_testFixtureFilesAreSynthetic(_ t: TestRunner, fixturesDir: URL) 
 // "$BUNDLE_ID" "<literal>"` call in every one of the seven scenarios names
 // something this file can show is shaped like a real identifier.
 
-private func hf_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenariosDir: URL) {
+private func hfix_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenariosDir: URL) {
     // Every literal (non-interpolated) identifier the seven scenarios click,
     // plus the two computed shapes (`setup.folder.<hash>.toggle`,
     // `popover.row.<hash>.launch`) matched by prefix/suffix instead.
@@ -184,13 +184,13 @@ private func hf_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenario
         "popover.profile.personal",
     ]
 
-    for scenario in hf_scenarioNames {
+    for scenario in hfix_scenarioNames {
         let path = scenariosDir.appendingPathComponent("\(scenario).sh").path
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
             t.expect(false, "could not read \(path)")
             continue
         }
-        for identifier in hf_clickedIdentifiers(in: content) {
+        for identifier in hfix_clickedIdentifiers(in: content) {
             let recognized = knownLiterals.contains(identifier)
                 || (identifier.hasPrefix("setup.folder.") && identifier.hasSuffix(".toggle"))
                 || (identifier.hasPrefix("popover.row.") && identifier.hasSuffix(".launch"))
@@ -205,7 +205,7 @@ private func hf_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenario
 /// a shell parser — because the seven scenarios this file owns are the only
 /// input it ever has to handle, and each one calls `click` with a plain
 /// double-quoted second argument.
-private func hf_clickedIdentifiers(in content: String) -> [String] {
+private func hfix_clickedIdentifiers(in content: String) -> [String] {
     var found: [String] = []
     let pattern = #"click\s+"\$BUNDLE_ID"\s+"([^"]+)""#
     guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
@@ -231,7 +231,7 @@ private func hf_clickedIdentifiers(in content: String) -> [String] {
 // SHA-256, hex, first 12 characters, computed on the caller's own
 // already-expanded input.
 
-private func hf_testPathHash(_ t: TestRunner, harnessDir: URL) {
+private func hfix_testPathHash(_ t: TestRunner, harnessDir: URL) {
     let cases: [(input: String, expected: String)] = [
         ("harness-checkout", "e8ef402c571d"),
         ("hub", "08d33503ee27"),
@@ -264,7 +264,7 @@ private struct HFRig {
     let environment: [String: String]
 }
 
-private func hf_makeRig(_ label: String, harnessDir: URL, t: TestRunner) -> HFRig? {
+private func hfix_makeRig(_ label: String, harnessDir: URL, t: TestRunner) -> HFRig? {
     let dir = TempDir(label)
     do {
         try FileManager.default.createDirectory(atPath: dir.path("home"), withIntermediateDirectories: true)
@@ -310,7 +310,7 @@ private func hf_makeRig(_ label: String, harnessDir: URL, t: TestRunner) -> HFRi
 
 /// Runs `body` (real scenario.sh + fixtures.sh calls) in the rig, exactly
 /// the way `harness/scenarios/agentmenu/*.sh` do.
-private func hf_runDriver(_ rig: HFRig, _ body: String) -> CLIResult {
+private func hfix_runDriver(_ rig: HFRig, _ body: String) -> CLIResult {
     let driverPath = rig.dir.path("driver.sh")
     let script = """
     #!/bin/bash
@@ -331,11 +331,11 @@ private func hf_runDriver(_ rig: HFRig, _ body: String) -> CLIResult {
 // MARK: - agentmenu/first-run: journal activation, the synthetic checkout,
 // and --no-agent / --profile.
 
-private func hf_testFirstRunFixture(_ t: TestRunner, harnessDir: URL) {
-    guard let rig = hf_makeRig("hf-first-run", harnessDir: harnessDir, t: t) else { return }
+private func hfix_testFirstRunFixture(_ t: TestRunner, harnessDir: URL) {
+    guard let rig = hfix_makeRig("hf-first-run", harnessDir: harnessDir, t: t) else { return }
     defer { rig.dir.cleanup() }
 
-    let result = hf_runDriver(rig, #"""
+    let result = hfix_runDriver(rig, #"""
     fixture agentmenu/first-run "nonce-1" --profile work:opus:sonnet --profile personal:fable:opus
     """#)
     t.expectEqual(result.status, 0, "agentmenu/first-run applied cleanly — \(result.stderr)")
@@ -359,30 +359,30 @@ private func hf_testFirstRunFixture(_ t: TestRunner, harnessDir: URL) {
     }
 
     // --no-agent removes the golden image's own stand-in claude binary.
-    guard let rigTwo = hf_makeRig("hf-first-run-no-agent", harnessDir: harnessDir, t: t) else { return }
+    guard let rigTwo = hfix_makeRig("hf-first-run-no-agent", harnessDir: harnessDir, t: t) else { return }
     defer { rigTwo.dir.cleanup() }
     try? FileManager.default.createDirectory(atPath: rigTwo.home + "/.local/bin", withIntermediateDirectories: true)
     FileManager.default.createFile(atPath: rigTwo.home + "/.local/bin/claude", contents: Data("stand-in".utf8))
-    let noAgentResult = hf_runDriver(rigTwo, #"fixture agentmenu/first-run "nonce-2" --no-agent"#)
+    let noAgentResult = hfix_runDriver(rigTwo, #"fixture agentmenu/first-run "nonce-2" --no-agent"#)
     t.expectEqual(noAgentResult.status, 0, "agentmenu/first-run --no-agent applied cleanly — \(noAgentResult.stderr)")
     t.expect(!FileManager.default.fileExists(atPath: rigTwo.home + "/.local/bin/claude"), "--no-agent removed ~/.local/bin/claude")
 
     // A malformed --profile spec is refused (exit 2), never silently
     // half-applied.
-    guard let rigThree = hf_makeRig("hf-first-run-bad-profile", harnessDir: harnessDir, t: t) else { return }
+    guard let rigThree = hfix_makeRig("hf-first-run-bad-profile", harnessDir: harnessDir, t: t) else { return }
     defer { rigThree.dir.cleanup() }
-    let badProfile = hf_runDriver(rigThree, #"fixture agentmenu/first-run "nonce-3" --profile not-well-formed"#)
+    let badProfile = hfix_runDriver(rigThree, #"fixture agentmenu/first-run "nonce-3" --profile not-well-formed"#)
     t.expect(badProfile.status != 0, "a malformed --profile spec is refused rather than silently accepted — got exit \(badProfile.status)")
 }
 
 // MARK: - agentmenu/configured-terminal: config.toml, the user's
 // terminal-app.toml overlay, and the profile it references.
 
-private func hf_testConfiguredTerminalFixture(_ t: TestRunner, harnessDir: URL) {
-    guard let rig = hf_makeRig("hf-configured-terminal", harnessDir: harnessDir, t: t) else { return }
+private func hfix_testConfiguredTerminalFixture(_ t: TestRunner, harnessDir: URL) {
+    guard let rig = hfix_makeRig("hf-configured-terminal", harnessDir: harnessDir, t: t) else { return }
     defer { rig.dir.cleanup() }
 
-    let result = hf_runDriver(rig, #"fixture agentmenu/configured-terminal "nonce-4""#)
+    let result = hfix_runDriver(rig, #"fixture agentmenu/configured-terminal "nonce-4""#)
     t.expectEqual(result.status, 0, "agentmenu/configured-terminal applied cleanly — \(result.stderr)")
 
     let configPath = rig.home + "/.config/agentmenu/config.toml"
@@ -409,11 +409,11 @@ private func hf_testConfiguredTerminalFixture(_ t: TestRunner, harnessDir: URL) 
 
 // MARK: - agentmenu/configured-profile: one account, no folders, no agent.
 
-private func hf_testConfiguredProfileFixture(_ t: TestRunner, harnessDir: URL) {
-    guard let rig = hf_makeRig("hf-configured-profile", harnessDir: harnessDir, t: t) else { return }
+private func hfix_testConfiguredProfileFixture(_ t: TestRunner, harnessDir: URL) {
+    guard let rig = hfix_makeRig("hf-configured-profile", harnessDir: harnessDir, t: t) else { return }
     defer { rig.dir.cleanup() }
 
-    let result = hf_runDriver(rig, #"fixture agentmenu/configured-profile "nonce-5""#)
+    let result = hfix_runDriver(rig, #"fixture agentmenu/configured-profile "nonce-5""#)
     t.expectEqual(result.status, 0, "agentmenu/configured-profile applied cleanly — \(result.stderr)")
 
     let configPath = rig.home + "/.config/agentmenu/config.toml"

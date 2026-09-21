@@ -72,6 +72,23 @@ property automationProcessNames : {"UserNotificationCenter", "tccd"} -- UNPINNED
 property automationAllowSubstrings : {"allow"} -- see calendarAllowSubstrings
 property automationDenySubstrings : {"don"} -- UNPINNED
 
+-- PINNED 2026-09-21 against the real dialog on macOS 26.6.2 in a manually
+-- cloned first-run-golden guest, raised by `osascript -e 'tell application
+-- "Finder" to move ...'` over ssh (the Finder-move translocation test that
+-- disproved `clear_quarantine`'s old assumption — see
+-- MeetingHopKit.BundleTranslocation's doc comment). System Events read the
+-- window's own text as:
+--   "sshd-keygen-wrapper" wants access to control "Finder". Allowing
+--   control will provide access to documents and data in "Finder", and to
+--   perform actions within that app.
+-- None of the three old guesses ("controlling", "apple events",
+-- "automation") appear anywhere in that sentence, so `wait automation`
+-- reported present:false with the dialog on screen and the run would have
+-- hung on this kind's own timeout. "wants access to control" is what is
+-- actually there, is not tied to which client or which target app the
+-- sentence names, and was confirmed present for real on the dialog above.
+property automationTextSubstrings : {"wants access to control"}
+
 -- macOS 26 asks separately, and repeatedly, for ScreenCaptureKit's "bypass the
 -- system private window picker" consent, even though kTCCServiceScreenCapture
 -- is already granted in the image (verified on a clone: the access row is
@@ -219,7 +236,7 @@ on kindSpec(kind)
     else if kind is "calendar" then
         return {calendarProcessNames, calendarAllowSubstrings, calendarDenySubstrings, {"calendar"}}
     else if kind is "automation" then
-        return {automationProcessNames, automationAllowSubstrings, automationDenySubstrings, {"controlling", "apple events", "automation"}}
+        return {automationProcessNames, automationAllowSubstrings, automationDenySubstrings, automationTextSubstrings}
     else if kind is "screenrecording" then
         return {screenrecordingProcessNames, screenrecordingAllowSubstrings, screenrecordingDenySubstrings, {"window picker", "record your screen", "screen and audio"}}
     else

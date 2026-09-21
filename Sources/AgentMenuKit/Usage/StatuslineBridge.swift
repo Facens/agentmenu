@@ -364,6 +364,84 @@ public enum StatuslineBridge {
         return result
     }
 
+    // MARK: - Re-validation (U10)
+
+    /// Recovers the CLI path a previously-installed bridge script's `exec`
+    /// line invokes, reversing `ShellQuoting.singleQuoted` the same way
+    /// `existingChain(inScript:)` already reverses it for `--chain` — same
+    /// escape dance, same tolerance, so the two parsers cannot drift apart
+    /// on what counts as a valid single-quoted argument.
+    public static func installedCLIPath(inScript contents: String) -> String? {
+        guard let marker = contents.range(of: "exec '") else { return nil }
+        var result = ""
+        var index = marker.upperBound
+        while index < contents.endIndex {
+            if contents[index] == "'" {
+                let remainder = contents[index...]
+                if remainder.hasPrefix("'\\''") {
+                    result.append("'")
+                    index = contents.index(index, offsetBy: 4)
+                    continue
+                }
+                break
+            }
+            result.append(contents[index])
+            index = contents.index(after: index)
+        }
+        return result
+    }
+
+    /// Whether an installed bridge script still points at a CLI this launch
+    /// can actually run.
+    ///
+    /// `absent` means there is nothing installed for this profile — not an
+    /// error, just nothing to re-validate. `current` means the script's own
+    /// `exec` line already names `expectedCLIPath` and that path is still on
+    /// disk. Everything else is `stale`, which deliberately covers two
+    /// different causes with one case: a path that no longer matches (the
+    /// bundle moved, or a translocation mount from a previous launch is
+    /// gone) and a path that still matches textually but no longer resolves
+    /// to a file (the same translocation mount, still named, already
+    /// unmounted). Both mean the same thing to a caller — the script cannot
+    /// be trusted to run — and `StatuslineBridgeTests` covers both, but
+    /// nothing downstream needs to tell them apart, so they are not split
+    /// into separate cases.
+    public enum BridgeState: Equatable {
+        case absent
+        case current
+        case stale(installed: String, expected: String)
+    }
+
+    /// Computes a `BridgeState` from a script's own text (nil when nothing
+    /// is installed for the profile) and the CLI path this launch would
+    /// write if it installed fresh.
+    ///
+    /// `fileExists` is a `(String) -> Bool` probe rather than a plain
+    /// `Bool` the caller computes up front, so the function stays pure in
+    /// its own body — a test drives "the path parses fine but the file is
+    /// gone" without touching the real filesystem, by handing in a stub
+    /// that always answers `false`. It defaults to a real check
+    /// (`FileManager.isExecutableFile`, matching the guard
+    /// `install-statusline` itself applies to a freshly resolved CLI path)
+    /// so an ordinary caller does not have to wire one up just to get the
+    /// real answer.
+    public static func bridgeState(
+        scriptContents: String?,
+        expectedCLIPath: String,
+        fileExists: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> BridgeState {
+        guard let scriptContents else { return .absent }
+        // A script this parser cannot make sense of at all resolves to the
+        // empty string here, which can never equal a real `expectedCLIPath`
+        // — so an unparseable script falls out of the same guard as a
+        // parseable-but-wrong one, rather than needing its own branch.
+        let installed = installedCLIPath(inScript: scriptContents) ?? ""
+        guard installed == expectedCLIPath, fileExists(installed) else {
+            return .stale(installed: installed, expected: expectedCLIPath)
+        }
+        return .current
+    }
+
     // MARK: - settings.json update
 
     /// The outcome of computing a `settings.json` update: the file's new

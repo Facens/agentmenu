@@ -15,6 +15,13 @@ let package = Package(
         .executable(name: "AgentMenuCLI", targets: ["AgentMenuCLI"]),
         .library(name: "AgentMenuKit", targets: ["AgentMenuKit"]),
     ],
+    // U10 / R12: Sparkle is attached to the app executable alone, below.
+    // 2.10.0 is the floor the plan pins; the package resolves an
+    // XCFramework binary target, which `packaging/bundle.sh` copies into
+    // Contents/Frameworks and signs bottom-up.
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
+    ],
     targets: [
         .target(
             name: "AgentMenuKit",
@@ -22,8 +29,18 @@ let package = Package(
         ),
         .executableTarget(
             name: "AgentMenu",
-            dependencies: ["AgentMenuKit"],
-            path: "Sources/AgentMenu"
+            // Sparkle is here and nowhere else: attaching it to
+            // AgentMenuKit would pull AppKit into the CLI and the test
+            // runner, which packaging/check-source.sh exists to prevent.
+            dependencies: ["AgentMenuKit", .product(name: "Sparkle", package: "Sparkle")],
+            path: "Sources/AgentMenu",
+            linkerSettings: [
+                // The framework ships inside the bundle, so the executable
+                // resolves @rpath/Sparkle.framework relative to itself.
+                // Without this the app links here and dies at launch on any
+                // machine, including this one.
+                .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
+            ]
         ),
         .executableTarget(
             name: "AgentMenuCLI",

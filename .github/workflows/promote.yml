@@ -1,0 +1,245 @@
+name: Promote to the update feed
+
+# The third step of a release, and the only one that changes what installed
+# copies of AgentMenu are offered (KTD15, as amended). The tag job attaches
+# the asset to a DRAFT release; `harness/gate.sh run` proves the stranger
+# tier against that exact asset and `harness/gate.sh publish` makes the
+# release public; this job then signs those published bytes into the appcast
+# on gh-pages. Nothing here is automatic: it runs on workflow_dispatch, for
+# one named tag, after a human has installed that published build on a
+# machine that did not build it (R25).
+#
+# The EdDSA private key lives in the `release-promotion` environment, not as
+# a repository secret, because a repository secret is readable by any
+# workflow on any ref and a bad promotion cannot be taken back — Sparkle
+# cannot downgrade, so every copy that fetches a broken update keeps it
+# (KTD18).
+#
+# What this job refuses to sign is the point of it. The bytes are fetched
+# from the release's own public download URL, not from a local build or a
+# workflow artifact, because the feed's signature has to cover what a user
+# will actually download (R17). Before the key touches them they are proven
+# stapled, notarized, team KSP2AAA5L2, and identical to the SHA-256 the tag
+# job recorded beside them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The published release tag to promote, e.g. v0.2.0 or v0.2.0-beta.1"
+        required: true
+        type: string
+
+# R27: nothing at the workflow level. The one job below asks for what it
+# needs and no other job inherits it.
+permissions: {}
+
+jobs:
+  promote:
+    runs-on: macos-14
+    # KTD18: the gate GitHub refuses to skip. A workflow_dispatch started by
+    # mistake still stops here for an approval.
+    environment: release-promotion
+    permissions:
+      contents: write   # to push the regenerated feed to gh-pages
+    timeout-minutes: 30
+    steps:
+      # The tag, not main: packaging/version.sh has to be the grammar that
+      # shipped in this build, not the one HEAD happens to carry.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: true
+
+      - id: meta
+        name: Read the channel from the tag, and refuse what cannot be promoted
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          case "$TAG" in
+            v*) VERSION="${TAG#v}" ;;
+            *) echo "::error::tag must start with v, got '$TAG'"; exit 1 ;;
+          esac
+          source packaging/version.sh
+          CHANNEL="$(version_channel "$VERSION")" || { echo "::error::'$TAG' is not a release tag this project can produce"; exit 1; }
+          if [ "$CHANNEL" = alpha ]; then
+            echo "::error::alpha builds are local; there is nothing to promote"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+
+      - id: release
+        name: Require a published release, never a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          # A draft's asset URLs are not public, and a draft has not been
+          # through gate.sh publish — which is the step that says the
+          # stranger tier ran against these exact bytes. Promoting one would
+          # sign something nobody has installed.
+          JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")"
+          DRAFT="$(printf '%s' "$JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["draft"])')"
+          if [ "$DRAFT" != "False" ]; then
+            echo "::error::$TAG is still a draft — run 'harness/gate.sh publish --tag $TAG' first (KTD15)"
+            exit 1
+          fi
+          NAME="AgentMenu-${{ steps.meta.outputs.version }}.zip"
+          URL="$(printf '%s' "$JSON" | python3 -c "
+          import json, sys
+          assets = json.load(sys.stdin)['assets']
+          print(next((a['browser_download_url'] for a in assets if a['name'] == '$NAME'), ''))
+          ")"
+          SHA_URL="$(printf '%s' "$JSON" | python3 -c "
+          import json, sys
+          assets = json.load(sys.stdin)['assets']
+          print(next((a['browser_download_url'] for a in assets if a['name'] == '$NAME.sha256'), ''))
+          ")"
+          if [ -z "$URL" ] || [ -z "$SHA_URL" ]; then
+            echo "::error::$TAG carries no $NAME and .sha256 pair"
+            exit 1
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "sha_url=$SHA_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Download the published asset and prove the bytes
+        env:
+          URL: ${{ steps.release.outputs.url }}
+          SHA_URL: ${{ steps.release.outputs.sha_url }}
+          NAME: ${{ steps.release.outputs.name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/feed"
+          curl -fsSL "$URL" -o "$RUNNER_TEMP/feed/$NAME"
+          curl -fsSL "$SHA_URL" -o "$RUNNER_TEMP/$NAME.sha256"
+
+          # The hash the tag job recorded, against the bytes the public URL
+          # just served. A mismatch means the asset was replaced after the
+          # gate ran, which is exactly the case this comparison exists for.
+          EXPECTED="$(cut -d' ' -f1 "$RUNNER_TEMP/$NAME.sha256")"
+          ACTUAL="$(shasum -a 256 "$RUNNER_TEMP/feed/$NAME" | cut -d' ' -f1)"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::the published asset does not match its own .sha256 ($ACTUAL vs $EXPECTED)"
+            exit 1
+          fi
+
+          # Unpacked only to be inspected. The archive itself is what gets
+          # signed, stapled ticket and all; a feed signed over a re-made
+          # archive would not match what the user downloads (KTD4).
+          UNPACKED="$RUNNER_TEMP/unpacked"
+          mkdir -p "$UNPACKED"
+          ditto -x -k "$RUNNER_TEMP/feed/$NAME" "$UNPACKED"
+          APP="$UNPACKED/AgentMenu.app"
+          test -d "$APP" || { echo "::error::the asset does not contain AgentMenu.app"; exit 1; }
+
+          # Stapled, so it opens with no network. Notarized and team-matched,
+          # so an EdDSA-valid archive that Gatekeeper would reject never
+          # reaches the feed — Sparkle accepts an update on EITHER a valid
+          # EdDSA signature or a matching code signature, so the feed is the
+          # only place this can be enforced.
+          xcrun stapler validate "$APP"
+          spctl -a -vvv -t exec "$APP" 2>&1 | tee "$RUNNER_TEMP/spctl.txt"
+          grep -q "source=Notarized Developer ID" "$RUNNER_TEMP/spctl.txt"
+          codesign -dvvv "$APP" 2>&1 | grep -q '^TeamIdentifier=KSP2AAA5L2'
+
+      - name: Fetch the feed as it stands
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          # generate_appcast reads an existing appcast.xml in the directory
+          # it is pointed at and carries its items forward, so the feed has
+          # to be brought here before it is regenerated. Without this the
+          # new appcast would contain exactly one item and every older
+          # version would vanish from the channel.
+          git fetch --no-tags --depth 1 origin gh-pages
+          git worktree add "$RUNNER_TEMP/pages" origin/gh-pages
+          if [ -f "$RUNNER_TEMP/pages/appcast.xml" ]; then
+            cp "$RUNNER_TEMP/pages/appcast.xml" "$RUNNER_TEMP/feed/appcast.xml"
+            echo "carrying forward $(grep -c '<item>' "$RUNNER_TEMP/feed/appcast.xml") existing item(s)"
+          else
+            echo "no appcast.xml on gh-pages yet — this promotion creates it"
+          fi
+
+      - name: Sign the feed
+        env:
+          SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -z "$SPARKLE_EDDSA_PRIVATE_KEY" ]; then
+            echo "::error::SPARKLE_EDDSA_PRIVATE_KEY is not set in the release-promotion environment — see docs/releasing.md, 'Provisioning the update feed'"
+            exit 1
+          fi
+
+          # Sparkle's tools ship inside the package artifact; resolving is
+          # what puts them on this runner, and it is the same version the app
+          # links against by construction.
+          swift package resolve
+          BIN="$(find .build/artifacts -type d -name bin -path '*sparkle*' -print -quit)"
+          test -n "$BIN" || { echo "::error::Sparkle's tools are not in .build/artifacts"; exit 1; }
+
+          # --channel beta marks the item as beta-only; a final carries no
+          # channel and therefore supersedes every beta of its version for
+          # everyone (KTD20). The download prefix is the release's own asset
+          # directory, so the enclosure URL in the feed is the URL these
+          # bytes were just fetched from.
+          CHANNEL_ARG=""
+          [ "$CHANNEL" = beta ] && CHANNEL_ARG="--channel beta"
+          # The key goes in on stdin, never to disk: a runner's filesystem
+          # outlives the step through the job's own temp directory, and this
+          # is the one secret with no rotation path (KTD17).
+          # shellcheck disable=SC2086
+          printf '%s' "$SPARKLE_EDDSA_PRIVATE_KEY" | "$BIN/generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/" \
+            --link "https://github.com/${GITHUB_REPOSITORY}" \
+            $CHANNEL_ARG \
+            "$RUNNER_TEMP/feed"
+
+          test -f "$RUNNER_TEMP/feed/appcast.xml" || { echo "::error::generate_appcast produced no appcast.xml"; exit 1; }
+
+      - name: Prove the feed describes these exact bytes
+        env:
+          NAME: ${{ steps.release.outputs.name }}
+        run: |
+          # The signature and length in the feed have to cover the archive a
+          # user downloads, which is the one hashed above. Reading them back
+          # out and checking the length against the file on disk catches the
+          # classic mistake — signing the pre-staple archive — because the
+          # two differ in size.
+          python3 - "$RUNNER_TEMP/feed/appcast.xml" "$RUNNER_TEMP/feed/$NAME" "$NAME" <<'PY'
+          import sys, os, xml.etree.ElementTree as ET
+
+          appcast, archive, name = sys.argv[1], sys.argv[2], sys.argv[3]
+          ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
+          root = ET.parse(appcast).getroot()
+          enclosures = [e for e in root.iter("enclosure") if e.get("url", "").endswith(name)]
+          if not enclosures:
+              sys.exit(f"::error::the feed carries no enclosure for {name}")
+          enclosure = enclosures[0]
+          signature = enclosure.get("{http://www.andymatuschak.org/xml-namespaces/sparkle}edSignature")
+          if not signature:
+              sys.exit(f"::error::{name}'s enclosure carries no EdDSA signature")
+          length = int(enclosure.get("length", "0"))
+          actual = os.path.getsize(archive)
+          if length != actual:
+              sys.exit(f"::error::the feed says {length} bytes, the asset is {actual}")
+          print(f"{name}: signed, {length} bytes, {len(list(root.iter('item')))} item(s) in the feed")
+          PY
+
+      - name: Publish the feed
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          cp "$RUNNER_TEMP/feed/appcast.xml" "$RUNNER_TEMP/pages/appcast.xml"
+          cd "$RUNNER_TEMP/pages"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          if git diff --cached --quiet; then
+            echo "::error::the regenerated feed is identical to the published one — $TAG is already promoted"
+            exit 1
+          fi
+          git commit -m "Promote $TAG to the update feed"
+          git push origin HEAD:gh-pages

@@ -27,3 +27,17 @@ no-usable-agent: the golden image's stand-in Claude Code binary was removed befo
 # MeetingHop — meetinghop:harness/scenarios/meetinghop/
 no-calendar-accounts: calendar access was granted but Calendar.app has no accounts configured, so there is nothing to read.
 no-calendar-permission-prompt: MeetingHop v0.1.0 never asks for calendar access on a vanilla Mac — the menu tells the user to grant it in System Settings instead, so a stranger who installs it sees no prompt and an empty menu (R21 — reported, not fixed here).
+no-zoom-installed: the golden image ships no Zoom client, so `join fired` proves the deep link fired and was journaled, but nothing could actually launch to confirm a real join (Covers AE4). Added 2026-09-21: meeting-in-three.sh has called `finding "no-zoom-installed"` since it was first written (a2b213a) and this code was never registered, so every run that ever reached that line failed as a harness error regardless of anything else in the scenario — found only once the join-identifier bug ahead of it stopped masking it.
+
+# Shared — harness/lib/scenario.sh's confirm_dialog. Not tied to one app:
+# the codes live here because the helper is byte-shared with MeetingHop's
+# copy of scenario.sh, even though only MeetingHop's scenarios call it as
+# of this writing — an AgentMenu scenario that adopts it would otherwise
+# harness-error on a retry, because a code missing from this file is
+# refused rather than recorded.
+# See confirm_dialog's own doc comment for the diagnosis this encodes: a
+# click succeeding and the app reporting the state it was meant to produce
+# are two different facts, and 3 of 11 runs against the notarized beta.3
+# asset showed the gap between them (2026-09-21).
+dialog-confirm-retry-2: confirm_dialog's first click was answered, but the state it was meant to produce did not appear in the app's journal until a second attempt.
+dialog-confirm-retry-3: the same, but needed a third and final attempt before the app's journal reported it.

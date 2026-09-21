@@ -74,12 +74,21 @@ public enum AccessibilityID {
     /// each row's chevron opens (`PopoverView.swift`, `FolderRow.swift`,
     /// `OverrideDisclosure.swift`, `StatusItemController.swift`).
     public enum Popover {
+        /// U11: the manual update check in the footer, and the banner that
+        /// says the app is running translocated. Both are drawn by this app,
+        /// unlike Sparkle's own window, which carries no identifiers of ours.
+        public static let checkForUpdates = "popover.checkForUpdates"
+        public static let translocationBanner = "popover.translocationBanner"
         /// The menu-bar button that opens and closes the popover.
         public static let statusItem = "popover.statusItem"
         /// The popover's own hosting content view — what makes it a
         /// findable "window" to System Events rather than an anonymous one.
         public static let container = "popover.container"
         public static let gear = "popover.gear"
+        /// The footer's Quit. An accessory app has no Dock icon and no
+        /// main menu, so this button is the only way out short of Force
+        /// Quit — and the only one a scenario can drive.
+        public static let quit = "popover.quit"
         public static func profile(_ profileID: String) -> String { "popover.profile.\(profileID)" }
 
         // Every row builder below takes `rowKey`, never a path. `Config.swift`
@@ -144,6 +153,23 @@ public enum AccessibilityID {
             public static let name = "settings.accounts.name"
             public static let installBridge = "settings.accounts.installBridge"
         }
+
+        /// U11's General tab. The updater's own window is Sparkle's and
+        /// carries no identifiers of ours, so these cover only the controls
+        /// this app draws.
+        public enum Updates {
+            public static let automatic = "settings.updates.automatic"
+            public static let beta = "settings.updates.beta"
+            public static let checkNow = "settings.updates.checkNow"
+            /// The line that says why the section is disabled on a build
+            /// that must not update itself — an alpha, or one with no
+            /// signing key.
+            public static let unavailable = "settings.updates.unavailable"
+        }
+
+        /// The login item toggle in the General tab. Same string as
+        /// MeetingHop's, so one scenario can drive either app.
+        public static let launchAtLogin = "settings.launchAtLoginToggle"
 
         public enum Agents {
             public static func path(_ agentID: String) -> String { "settings.agents.\(agentID).path" }

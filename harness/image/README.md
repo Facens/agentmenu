@@ -127,7 +127,7 @@ background it blindly the first time. Expected durations:
 | Stage 1: `vanilla-tahoe.pkr.hcl` | Setup Assistant, driven screen by screen by OCR waits and clicks, cloned from `first-run-base` | a few minutes; target under five |
 | Stage 2: `disable-sip.pkr.hcl` | recovery boot, `csrutil disable`, halt | 3-5 min |
 | Stage 3: `provision.sh` | TCC seeding, Automation Mode, locale, Software Update off, Claude Code install | 5-10 min |
-| `verify.sh` | clone, boot, six checks, discard the clone | 2-5 min |
+| `verify.sh` | clone, boot, the checks it lists, discard the clone | 2-5 min |
 
 ### The IPSW
 
@@ -464,11 +464,11 @@ harness/image/verify.sh --keep       # leaves the throwaway clone around for deb
 ```
 
 Never touches the named image directly — it clones it into a throwaway VM,
-boots that, runs six checks over SSH, and deletes the clone (unless
+boots that, runs the checks it lists over SSH, and deletes the clone (unless
 `--keep`). Each check is functional: it does the real thing (a real
 screenshot, a real query, a real `TCC.db` read) rather than trusting that an
 earlier step reported success. See `verify.sh`'s own header for the full
-list of what the six checks are and why each one is checked the way it is.
+list of what the the checks it lists are and why each one is checked the way it is.
 
 `verify.sh` cannot exercise the one truly end-to-end proof that Gatekeeper
 survived the fork: showing the actual "are you sure you want to open this?"

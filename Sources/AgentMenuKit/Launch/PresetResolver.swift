@@ -26,15 +26,36 @@ public struct UnsupportedValue: Equatable {
     }
 }
 
+/// R50: a preset value the agent declares, and would refuse in combination
+/// with another one, replaced by the value it accepts instead of being sent
+/// and rejected. Unlike an `UnsupportedValue` the field still reaches the
+/// binary — with `to` in place of `from`.
+public struct AdjustedValue: Equatable {
+    public let field: PresetField
+    public let from: String
+    public let to: String
+    public let reason: String
+
+    public init(field: PresetField, from: String, to: String, reason: String) {
+        self.field = field
+        self.from = from
+        self.to = to
+        self.reason = reason
+    }
+}
+
 /// The outcome of KTD6's three-layer merge: the effective preset with every
-/// unsupported value already stripped, plus what was stripped and why.
+/// unsupported value already stripped and every refused combination already
+/// raised, plus what was stripped or changed, and why.
 public struct ResolvedPreset: Equatable {
     public let preset: Preset
     public let unsupported: [UnsupportedValue]
+    public let adjusted: [AdjustedValue]
 
-    public init(preset: Preset, unsupported: [UnsupportedValue]) {
+    public init(preset: Preset, unsupported: [UnsupportedValue], adjusted: [AdjustedValue] = []) {
         self.preset = preset
         self.unsupported = unsupported
+        self.adjusted = adjusted
     }
 }
 
@@ -60,10 +81,11 @@ public enum PresetResolver {
     public static func resolve(global: Preset, folder: Preset, oneShot: Preset, agent: AgentManifest?) -> ResolvedPreset {
         var merged = global.overlaid(with: folder).overlaid(with: oneShot)
         guard let agent else {
-            return ResolvedPreset(preset: merged, unsupported: [])
+            return ResolvedPreset(preset: merged, unsupported: [], adjusted: [])
         }
 
         var unsupported: [UnsupportedValue] = []
+        var adjusted: [AdjustedValue] = []
 
         if let model = merged.model {
             if let spec = agent.model, spec.accepts(model) {
@@ -135,7 +157,31 @@ public enum PresetResolver {
             }
         }
 
-        return ResolvedPreset(preset: merged, unsupported: unsupported)
+        // R50: an agent may accept a value on its own and refuse it beside
+        // another. Claude Code ranks its models and will not let a weaker one
+        // advise a stronger one — `--model fable --advisor opus` answers
+        // `"opus" cannot advise "claude-fable-5-1" (the advisor must be at
+        // least as capable as the main model)` and then runs with no advisor
+        // at all. Dropping the advisor here the way an unsupported value is
+        // dropped would not fix it: with no `--advisor`, the binary falls back
+        // to `advisorModel` in the profile's settings.json and refuses the
+        // same pairing, silently. So the advisor is raised to a model the
+        // agent accepts beside this one, and the launch keeps an advisor.
+        if let model = merged.model,
+           case .model(let advisorModel)? = merged.advisor,
+           let spec = agent.advisor,
+           let raised = spec.raised(advisorModel, toAtLeast: model) {
+            merged.advisor = .model(raised)
+            adjusted.append(AdjustedValue(
+                field: .advisor,
+                from: advisorModel,
+                to: raised,
+                reason: "\(agent.id) refuses an advisor weaker than the main model, and '\(advisorModel)' "
+                    + "ranks below '\(model)'"
+            ))
+        }
+
+        return ResolvedPreset(preset: merged, unsupported: unsupported, adjusted: adjusted)
     }
 
     /// `declared` distinguishes "the capability section is absent entirely"

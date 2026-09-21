@@ -57,6 +57,38 @@ sed -e "s/__VERSION__/$VERSION/g" -e "s/__BUILD__/$BUILD/g" "$ROOT/packaging/Inf
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # ---------------------------------------------------------------------------
+# Sparkle (U10 / R12). The package dependency resolves an XCFramework into
+# .build/artifacts; the framework itself has to be copied into the bundle and
+# signed here, because SwiftPM has no notion of an app bundle.
+#
+# `ditto`, never `cp -R` (KTD13): the framework is a versioned bundle whose
+# Versions/Current symlink `cp -R` would either follow or mangle, and a
+# framework that has lost it does not load.
+SPARKLE_SRC="$(find "$ROOT/.build/artifacts" -type d -name Sparkle.framework -path '*macos*' -print -quit 2>/dev/null || true)"
+if [ -z "$SPARKLE_SRC" ]; then
+    echo "error: Sparkle.framework not found under .build/artifacts — run 'swift package resolve' first" >&2
+    exit 1
+fi
+FRAMEWORKS="$APP/Contents/Frameworks"
+mkdir -p "$FRAMEWORKS"
+rm -rf "$FRAMEWORKS/Sparkle.framework"
+ditto "$SPARKLE_SRC" "$FRAMEWORKS/Sparkle.framework"
+
+# KTD19 instantiated for a dependency we do not build: Sparkle ships
+# universal, this app ships arm64, and a release asserts the app executable is
+# arm64 exactly. Thinning here keeps the bundle one architecture throughout
+# instead of carrying an x86_64 half no release will ever run, and costs
+# nothing at signing time because every one of these is re-signed below
+# anyway. A file that is already single-architecture is left alone.
+while IFS= read -r macho; do
+    case "$(file -b "$macho")" in
+        *"universal binary"*)
+            lipo -thin arm64 "$macho" -output "$macho.arm64" && mv -f "$macho.arm64" "$macho"
+            ;;
+    esac
+done < <(find "$FRAMEWORKS/Sparkle.framework/Versions/B" -type f -exec sh -c 'case "$(file -b "$1")" in Mach-O*) echo "$1";; esac' _ {} \;)
+
+# ---------------------------------------------------------------------------
 # Signing.
 #
 # R1 / KTD1: the release identity is the Developer ID, referenced here once.
@@ -101,6 +133,25 @@ fi
 # Contents/Resources; verify-signing.sh tells the story). Nested code first,
 # each with its own identifier; the app last, with the app's entitlements
 # (R4). The CLI sends no Apple Events and gets no entitlements.
+#
+# Sparkle first, and inside it deepest first: the XPC services and the two
+# helper apps are code the framework contains, so a signature over the
+# framework is only valid once they are final. Signing the framework through
+# its Versions/B directory rather than the symlinked top level is what
+# codesign expects of a versioned bundle; signing the top level seals the
+# symlinks instead.
+SPARKLE_VERSION_DIR="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+"${SIGN[@]}" "$SPARKLE_VERSION_DIR/XPCServices/Downloader.xpc"
+"${SIGN[@]}" "$SPARKLE_VERSION_DIR/XPCServices/Installer.xpc"
+"${SIGN[@]}" "$SPARKLE_VERSION_DIR/Updater.app"
+"${SIGN[@]}" "$SPARKLE_VERSION_DIR/Autoupdate"
+"${SIGN[@]}" "$SPARKLE_VERSION_DIR"
+# None of those carry entitlements. Sparkle ships Autoupdate with an
+# application-identifier entitlement of its own and the rest with empty
+# dictionaries; re-signing without an entitlements file drops them, which is
+# right for a Developer ID app that is not sandboxed — the XPC services need
+# sandbox entitlements only when the host app is sandboxed, and this one is
+# not. verify-signing.sh asserts that shape rather than trusting this comment.
 "${SIGN[@]}" --identifier dev.facens.agentmenu.cli "$APP/Contents/Resources/bin/agentmenu"
 "${SIGN[@]}" --entitlements "$ROOT/packaging/AgentMenu.entitlements" "$APP"
 

@@ -15,19 +15,13 @@
   GPL-3.0-or-later
 </p>
 
-```
-┌─────────────────────────────┐
-│  Work  │  Personal          │   profile switch
-│  5h ▓▓▓░░ 13%  ·  7d ▓▓░ 24%│   rate-limit readout, with its age
-│  ◱ Finder: ~/dev/agentmenu  │   the front Finder window
-│                             │
-│  Hub              opus  high│   saved preset, shown before you click
-│  Compliance PU              │
-│  Home facens          ⚠︎     │   ⚠︎ = this target bypasses the agent's prompts
-│                             │
-│  ⚙ Settings        ⏻ Quit   │
-└─────────────────────────────┘
-```
+<p align="center">
+  <img src="assets/screenshots/popover.png" width="426" alt="The AgentMenu popover: a Work/Personal profile switch, a rate-limit readout with a 5-hour and a weekly bar, the front Finder window as a launch target, and three project rows each showing the model and effort it would launch with">
+</p>
+
+<p align="center">
+  <sub>A ⚠︎ on a row marks a target that bypasses the agent's own permission prompts.</sub>
+</p>
 
 Changing model or effort inside a running agent session costs tokens and
 attention: the session is already loaded when the correction happens. AgentMenu

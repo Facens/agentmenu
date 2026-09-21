@@ -8,7 +8,10 @@ import AgentMenuKit
 /// copy of `Resources/agents/claude-code.toml` — most scenarios here are
 /// about the merge and validation logic, not about one real manifest's
 /// values, so they should not be able to fail just because that file changes.
-private func fixtureAgent(advisorDisableArgs: [String] = ["--no-advisor"]) -> AgentManifest {
+private func fixtureAgent(
+    advisorDisableArgs: [String] = ["--no-advisor"],
+    advisorRankOrder: [String] = []
+) -> AgentManifest {
     AgentManifest(
         id: "fixture-agent",
         displayName: "Fixture Agent",
@@ -17,9 +20,15 @@ private func fixtureAgent(advisorDisableArgs: [String] = ["--no-advisor"]) -> Ag
         model: FlagSpec(flag: "--model", values: ["sonnet", "opus"]),
         effort: FlagSpec(flag: "--effort", values: ["low", "medium", "high"]),
         permissionMode: PermissionSpec(flag: "--permission-mode", values: ["manual", "bypassPermissions"], bypassValues: ["bypassPermissions"]),
-        advisor: AdvisorSpec(flag: "--advisor", values: ["opus", "sonnet"], disableArgs: advisorDisableArgs),
+        advisor: AdvisorSpec(flag: "--advisor", values: ["opus", "sonnet"], disableArgs: advisorDisableArgs, rankOrder: advisorRankOrder),
         origin: .bundled
     )
+}
+
+/// R50: the fixture above with the two models ranked — sonnet below opus, the
+/// order Claude Code's own catalog gives those aliases.
+private func rankedFixtureAgent() -> AgentManifest {
+    fixtureAgent(advisorRankOrder: ["sonnet", "opus"])
 }
 
 func runPresetResolverTests(_ t: TestRunner) {
@@ -163,5 +172,104 @@ func runPresetResolverTests(_ t: TestRunner) {
         t.expectEqual(resolved.preset.terminal, "some-terminal", "terminal id passes through untouched")
         t.expectEqual(resolved.preset.profile, "some-profile", "profile id passes through untouched")
         t.expectEqual(resolved.unsupported, [], "none of these fields are checked by this resolver")
+    }
+
+    // MARK: 12. R50 — an advisor ranked below the main model is raised to it, not dropped
+
+    do {
+        let preset = Preset(model: "opus", advisor: .model("sonnet"))
+        let resolved = PresetResolver.resolve(global: preset, folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent())
+
+        t.expectEqual(resolved.preset.advisor, .model("opus"), "sonnet cannot advise opus, so the advisor is raised to opus")
+        t.expectEqual(resolved.preset.model, "opus", "the main model is untouched — the advisor moves, never the model")
+        t.expectEqual(resolved.unsupported, [], "a raised value is not an unsupported one: the flag still reaches the binary")
+        t.expectEqual(resolved.adjusted.count, 1, "exactly one adjustment reported")
+        if let first = resolved.adjusted.first {
+            t.expectEqual(first.field, .advisor, "the adjustment names the advisor field")
+            t.expectEqual(first.from, "sonnet", "it carries the value the user chose")
+            t.expectEqual(first.to, "opus", "it carries the value that will be sent")
+            t.expect(first.reason.contains("fixture-agent"), "the reason names the manifest: \(first.reason)")
+        }
+    }
+
+    // MARK: 13. R50 — an advisor at or above the main model's rank is left alone
+
+    do {
+        let atSameRank = PresetResolver.resolve(
+            global: Preset(model: "opus", advisor: .model("opus")), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
+        )
+        t.expectEqual(atSameRank.preset.advisor, .model("opus"), "equal ranks pair — verified against the real binary, not inferred")
+        t.expectEqual(atSameRank.adjusted, [], "nothing to adjust")
+
+        let above = PresetResolver.resolve(
+            global: Preset(model: "sonnet", advisor: .model("opus")), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
+        )
+        t.expectEqual(above.preset.advisor, .model("opus"), "a stronger advisor stands")
+        t.expectEqual(above.adjusted, [], "nothing to adjust")
+    }
+
+    // MARK: 14. R50 — a manifest that declares no ranks accepts every pairing
+
+    do {
+        let resolved = PresetResolver.resolve(
+            global: Preset(model: "opus", advisor: .model("sonnet")), folder: Preset(), oneShot: Preset(), agent: fixtureAgent()
+        )
+        t.expectEqual(resolved.preset.advisor, .model("sonnet"), "with no declared order, no pairing is refused and nothing is raised")
+        t.expectEqual(resolved.adjusted, [], "nothing to adjust")
+    }
+
+    // MARK: 15. R50 — with no effective main model there is nothing to compare, so the advisor stands
+
+    do {
+        let resolved = PresetResolver.resolve(
+            global: Preset(advisor: .model("sonnet")), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
+        )
+        t.expectEqual(resolved.preset.advisor, .model("sonnet"), "the agent's own default model is unknown here, so the advisor is left as chosen")
+        t.expectEqual(resolved.adjusted, [], "nothing to adjust")
+    }
+
+    // MARK: 16. R50 — an advisor turned off stays off; raising applies to a chosen model only
+
+    do {
+        let resolved = PresetResolver.resolve(
+            global: Preset(model: "opus", advisor: .off), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
+        )
+        t.expectEqual(resolved.preset.advisor, .off, "off is a choice, not a weak advisor")
+        t.expectEqual(resolved.adjusted, [], "nothing to adjust")
+    }
+
+    // MARK: 17. R50 — when the main model is not itself an advisor value, the weakest advisor that reaches its class wins
+
+    do {
+        let agent = AgentManifest(
+            id: "asymmetric",
+            displayName: "Asymmetric",
+            binary: "a",
+            model: FlagSpec(flag: "--model", values: ["small", "huge"]),
+            advisor: AdvisorSpec(
+                flag: "--advisor",
+                values: ["medium", "large", "enormous"],
+                rankOrder: ["small", "medium", "huge", "large", "enormous"]
+            ),
+            origin: .bundled
+        )
+        let resolved = PresetResolver.resolve(
+            global: Preset(model: "huge", advisor: .model("medium")), folder: Preset(), oneShot: Preset(), agent: agent
+        )
+
+        t.expectEqual(resolved.preset.advisor, .model("large"), "large is the cheapest advisor that reaches huge's class; enormous overshoots")
+        t.expectEqual(resolved.adjusted.first?.from, "medium", "the adjustment carries the chosen value")
+        t.expectEqual(resolved.adjusted.first?.to, "large", "and the value that replaces it")
+    }
+
+    // MARK: 18. R50 — an unsupported advisor is still dropped, never raised
+
+    do {
+        let resolved = PresetResolver.resolve(
+            global: Preset(model: "opus", advisor: .model("haiku")), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
+        )
+        t.expect(resolved.preset.advisor == nil, "haiku is not a declared advisor value, so it is stripped before any ranking applies")
+        t.expectEqual(resolved.unsupported.first?.field, .advisor, "reported unsupported")
+        t.expectEqual(resolved.adjusted, [], "a stripped value is not an adjusted one")
     }
 }

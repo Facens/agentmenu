@@ -36,6 +36,11 @@ including commercial terms.** You keep the copyright in your contribution. You
 confirm you are entitled to grant this — that the work is yours, or that your
 employer has authorised it.
 
+**You also grant, on the same terms, a patent licence** covering any patent
+claim you own or control that your contribution — alone, or combined with this
+project — would otherwise infringe, to make, use, sell, offer to sell, import
+and otherwise transfer it.
+
 Concretely: your contribution may end up in a paid build of AgentMenu. That is
 stated here, upfront, rather than announced after the fact.
 

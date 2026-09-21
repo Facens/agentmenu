@@ -21,6 +21,45 @@ final class SettingsModel: ObservableObject {
         set { environment.update { $0 = newValue } }
     }
 
+    /// Sparkle's own preference, not a copy of it: read and written through
+    /// the updater so the window and Sparkle cannot disagree (KTD8). The
+    /// `objectWillChange` is manual because the value lives in Sparkle, not
+    /// in a `@Published` here — nothing else would tell the view it moved.
+    var automaticUpdateChecks: Bool {
+        get { updater.automaticallyChecksForUpdates }
+        set {
+            objectWillChange.send()
+            updater.automaticallyChecksForUpdates = newValue
+        }
+    }
+
+    /// The login item. Not a stored preference: `SMAppService` is the only
+    /// copy of this answer, the same way Sparkle owns the automatic-check
+    /// preference above (KTD8), and the user can turn it off in System
+    /// Settings without this app hearing about it. So it is read back on
+    /// every access, and the write re-reads it — a refusal (an ad-hoc build,
+    /// a translocated copy) then shows as the toggle sliding back rather
+    /// than as a switch that lies.
+    var launchAtLogin: Bool {
+        get { LaunchAtLogin.isEnabled }
+        set {
+            objectWillChange.send()
+            LaunchAtLogin.set(newValue)
+        }
+    }
+
+    /// `[updates] beta` in config.toml, which is the only copy of this
+    /// answer — Sparkle persists no channel preference (KTD20).
+    /// Shows the preference as it stands — the user's choice, or the
+    /// default this build implies — and writes a decision the moment the
+    /// toggle moves, which is what turns nil into a stored value.
+    var betaUpdates: Bool {
+        get { UpdatePolicy.betaEnabled(preference: config.betaUpdates, version: agentMenuVersion) }
+        set { config.betaUpdates = newValue }
+    }
+
+    var updater: UpdaterController { environment.updater }
+
     @Published var selectedFolder: String?
     @Published var selectedProfile: String?
     @Published var failure: String?

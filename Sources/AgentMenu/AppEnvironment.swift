@@ -47,6 +47,25 @@ final class AppEnvironment: ObservableObject {
     /// computed once and thrown away when the configuration changes.
     private var componentOptionsCache: (agents: [(id: String, name: String)], terminals: [(id: String, name: String)])?
 
+    /// Sparkle, and the two questions it asks this app: which channels this
+    /// copy accepts, and what to do when an update is waiting (U11).
+    ///
+    /// Lazy for the same reason `popover` is — it is created on first use,
+    /// which `AppDelegate` forces at launch so the updater starts checking
+    /// without anyone opening Settings first.
+    private(set) lazy var updater = UpdaterController(
+        betaEnabled: { [weak self] in
+            UpdatePolicy.betaEnabled(preference: self?.config.betaUpdates, version: agentMenuVersion)
+        },
+        updatePending: { [weak self] pending in self?.updatePending = pending }
+    )
+
+    /// True while an update is downloaded and waiting for the user to act on
+    /// it, and Sparkle is not itself putting a window in front of them (R18).
+    /// An app with no Dock icon has to say so somewhere of its own: the
+    /// status-item badge and the popover's own row both read this.
+    @Published private(set) var updatePending = false
+
     private(set) lazy var popover = PopoverModel(environment: self, service: self)
     private(set) lazy var settings = SettingsModel(environment: self)
     private(set) lazy var setup = SetupModel(environment: self)
@@ -54,6 +73,15 @@ final class AppEnvironment: ObservableObject {
     /// Set when a save fails, so a surface can show it rather than losing the
     /// change silently.
     @Published var saveFailure: String?
+
+    /// Profiles whose status-line bridge `revalidateStatuslineBridges()`
+    /// found stale while this launch is translocated, and therefore left
+    /// alone rather than rewrote (U10; R26). A stale bridge found on an
+    /// ordinary, non-translocated launch is just fixed in place and never
+    /// shows up here at all — this set exists so U11's persistent
+    /// translocation banner has something concrete to point at instead of
+    /// only naming the general symptom.
+    @Published private(set) var staleTranslocatedBridgeProfileIDs: Set<String> = []
 
     /// `overrides` defaults to `Overrides.forGUI()` rather than an all-nil
     /// value: that is the one call in the app that decides, from the real
@@ -311,7 +339,87 @@ final class AppEnvironment: ObservableObject {
         return FileManager.default.isExecutableFile(atPath: candidate.path) ? candidate.path : nil
     }
 
+    /// Re-validates every profile's installed status-line bridge on this
+    /// launch, rather than trusting whatever path was baked in the last
+    /// time someone (or a previous launch of this same method) wrote it
+    /// (U10, R26).
+    ///
+    /// `cliPath()` above is a run-time resolution, and under App
+    /// Translocation that is exactly the problem: while this app runs from
+    /// Gatekeeper's randomized read-only mount
+    /// (`/private/var/.../AppTranslocation/<uuid>/d/AgentMenu.app`), the
+    /// path it resolves is only good for this one launch — a bridge script
+    /// written then execs a path that stops existing the moment the mount
+    /// is gone, and Claude Code's status line goes blank with nothing on
+    /// screen to explain why. The same thing happens, more mundanely,
+    /// whenever the bundle itself is moved between `/Applications` and
+    /// `~/Applications`.
+    ///
+    /// A stale bridge is handled one of two ways, and never a third:
+    /// - not translocated: rewritten by running `install-statusline`
+    ///   through `installStatusLine(for:)` — the same path the user's own
+    ///   "Install" click takes, so the CLI stays the only thing that ever
+    ///   writes into an agent's configuration directory (R47). This is not
+    ///   reimplemented here.
+    /// - translocated: left untouched. Writing the translocated path back
+    ///   in is the very bug this method exists to stop, so the profile id
+    ///   is recorded in `staleTranslocatedBridgeProfileIDs` instead, for
+    ///   U11's banner to read later, and the script on disk does not
+    ///   change.
+    ///
+    /// Not main-actor work, and must not become any: reading a script file
+    /// is disk I/O per profile, and rewriting one runs the bundled CLI as a
+    /// subprocess (`installStatusLine(for:)` already isolates that). Only
+    /// what is cheap and synchronous — reading `config.profiles`, the one
+    /// `isExecutableFile` check inside `cliPath()`, and the bundle's own
+    /// path — runs before the hand-off, so a launch is never made to wait
+    /// on this.
+    func revalidateStatuslineBridges() {
+        guard let expectedCLIPath = AppEnvironment.cliPath() else { return }
+        let profiles = config.profiles
+        let translocated = BundleTranslocation.isTranslocated(bundlePath: Bundle.main.bundleURL.path)
 
+        Task.detached(priority: .background) {
+            for profile in profiles {
+                // "Has a bridge installed" is read straight off disk — this
+                // profile's own `agentmenu-statusline.sh` exists — rather
+                // than by first checking that `settings.json` still names
+                // it. That trade is deliberate: confirming the latter means
+                // resolving the right `settings.json` for this profile
+                // (`InstallStatuslineCommand`'s `claudeCodeManifest()` does
+                // that today, in the CLI, not here) and following the same
+                // "another profile's settings can name this one's script"
+                // indirection `bridgeScriptPath(inCommand:)`'s own doc
+                // comment describes — real complexity this unit does not
+                // need to take on. The cost is narrow and already
+                // idempotent: a profile whose `statusLine` key was hand-
+                // removed but whose script file survives gets that script
+                // silently rewritten on the next launch, exactly as if the
+                // user had clicked "Install" again — not a new kind of
+                // write, just an automatic trigger for one that already
+                // existed. What this does NOT cover is the chained case:
+                // this profile's own script may not exist at all because
+                // its settings.json points at a sibling's, and that sibling
+                // is only re-validated when its own profile is reached in
+                // this same loop.
+                let scriptURL = profile.expandedConfigDirectory
+                    .appendingPathComponent(StatuslineBridge.scriptFilename)
+                let contents = try? String(contentsOf: scriptURL, encoding: .utf8)
+                let state = StatuslineBridge.bridgeState(
+                    scriptContents: contents, expectedCLIPath: expectedCLIPath
+                )
+                guard case .stale = state else { continue }
+
+                if translocated {
+                    _ = await MainActor.run {
+                        self.staleTranslocatedBridgeProfileIDs.insert(profile.id)
+                    }
+                } else {
+                    _ = AppEnvironment.installStatusLine(for: profile)
+                }
+            }
+        }
+    }
 
     /// Resolves a binary through a login shell once and caches it (KTD5, R22).
     /// Used by the settings pane's "Find" button and by first run; a launch goes

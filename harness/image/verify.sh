@@ -150,8 +150,14 @@ until ssh_guest "true" >/dev/null 2>&1; do
 done
 
 failures=0
-fail() { echo "  ✗ $1" >&2; failures=$((failures + 1)); }
-ok() { echo "  ✓ $1"; }
+skipped=0
+checks=0
+fail() { echo "  ✗ $1" >&2; failures=$((failures + 1)); checks=$((checks + 1)); }
+ok() { echo "  ✓ $1"; checks=$((checks + 1)); }
+# A check that could not run is not a check that passed. The summary used to
+# print a fixed count whatever happened, so a skipped isolation check read as
+# a clean bill of health on the one report a release gate trusts.
+skip() { echo "  ? $1" >&2; skipped=$((skipped + 1)); }
 
 echo "golden image check: $SOURCE_IMAGE (via $CLONE_VM at $GUEST_IP)"
 
@@ -202,6 +208,39 @@ else
     fail "claude --version produced no output (is Claude Code installed at ~/.local/bin/claude?)"
 fi
 
+# 4b. The build's own provenance record, and the autoupdater switch beside it.
+# README.md told the maintainer verify.sh was what caught a missing
+# /etc/first-run-golden.json; it never read the file at all. These are the two
+# artefacts the forced-stop path at build.sh's shutdown step destroyed once
+# already, which is exactly when a check that reads them earns its place.
+# grep on the guest, not `cat` back to the host: ssh_guest_capture keeps only
+# the LAST non-blank line (its own contract), and the manifest is pretty-printed
+# JSON, so catting it here returned "}" and this check failed on a file that was
+# perfectly fine. Counting the key in the guest keeps the answer one line.
+manifest_keys="$(ssh_guest_capture "sudo grep -c '\"build_id\"' /etc/first-run-golden.json")" || manifest_keys=""
+case "$manifest_keys" in
+    ''|0) fail "/etc/first-run-golden.json is missing, unreadable, or carries no build_id -- provisioning's last write did not survive" ;;
+    *) ok "/etc/first-run-golden.json is present and carries build_id" ;;
+esac
+
+autoupdater="$(ssh_guest_capture "grep -c DISABLE_AUTOUPDATER ~/.zshenv")" || autoupdater="0"
+case "$autoupdater" in
+    ''|0) fail "~/.zshenv carries no DISABLE_AUTOUPDATER; a stranger run would fight a Claude Code autoupdate mid-scenario" ;;
+    *) ok "~/.zshenv sets DISABLE_AUTOUPDATER ($autoupdater line(s))" ;;
+esac
+
+# 4c. The driver can actually drive Calendar.app. Two grants, both needed, and
+# the second only surfaces once the first is in place (see tcc-seed.sh). This
+# is checked functionally rather than by reading the table, because a row that
+# is present and a grant that works are different claims -- the whole reason
+# every other check here does the thing rather than inspecting intent.
+cal_names="$(ssh_guest_capture "osascript -e 'tell application \"Calendar\" to get name of every calendar'")" || cal_names=""
+case "$cal_names" in
+    ""|*error*|*"-1712"*|*"not allowed"*)
+        fail "the driver cannot script Calendar.app (got: '${cal_names:-no output, which is what the -1712 timeout looks like}'); R10's calendar fixtures need kTCCServiceAppleEvents on com.apple.iCal AND kTCCServiceCalendarsFullAccess" ;;
+    *) ok "Calendar.app answers the driver: $cal_names" ;;
+esac
+
 # 5. The app under test is never seeded (R4): no TCC row for either bundle
 # id, in either database.
 tcc_query="SELECT count(*) FROM access WHERE client='dev.facens.agentmenu' OR client='dev.facens.meetinghop';"
@@ -219,7 +258,7 @@ fi
 host_default_iface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
 host_lan_ip="$(ipconfig getifaddr "$host_default_iface" 2>/dev/null || true)"
 if [ -z "$host_lan_ip" ]; then
-    echo "  ? could not determine the host's own LAN address (no default route interface?); skipping the bridged-interface check -- confirm by hand." >&2
+    skip "could not determine the host's own LAN address (no default route interface?); the bridged-interface check did not run -- confirm by hand." 
 else
     guest_prefix="${GUEST_IP%.*}"
     host_prefix="${host_lan_ip%.*}"
@@ -243,7 +282,14 @@ else
 fi
 
 if [ "$failures" -gt 0 ]; then
-    echo "golden image check: FAIL ($failures)" >&2
+    echo "golden image check: FAIL ($failures of $((checks + skipped)))" >&2
     exit 1
 fi
-echo "golden image check: ok (7 checks)"
+if [ "$skipped" -gt 0 ]; then
+    echo "golden image check: $checks ok, $skipped could not run" >&2
+    [ "${HARNESS_ALLOW_SKIPPED_CHECKS:-0}" = "1" ] || {
+        echo "golden image check: FAIL -- a check did not run, and this image gates a release; set HARNESS_ALLOW_SKIPPED_CHECKS=1 to accept it anyway." >&2
+        exit 1
+    }
+fi
+echo "golden image check: ok ($checks checks)"

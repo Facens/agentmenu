@@ -154,6 +154,20 @@ public struct Config: Equatable {
     public var binaries: [String: String]
     public var agentState: [String: ComponentState]
     public var terminalState: [String: ComponentState]
+    /// `[updates] beta` — whether this copy is offered beta releases (KTD20).
+    ///
+    /// Sparkle keeps no channel preference of its own, so this is the only
+    /// copy of the answer, and it is deliberately tri-state: nil means the
+    /// user has never said, and then `UpdatePolicy.defaultBetaPreference`
+    /// derives it from the running build — on for a beta, off otherwise. A
+    /// beta tester is already on that channel, and defaulting them off would
+    /// hide the one update they are actually waiting for.
+    ///
+    /// Storing the derived answer instead would be the mirroring KTD8
+    /// forbids: the file would then say "beta = true" for a copy that is
+    /// only on betas because of the build it happens to be, and would keep
+    /// saying it after that copy updated to a final.
+    public var betaUpdates: Bool?
 
     /// The shipped empty configuration: no profiles, no folders, an empty
     /// global default. In particular `defaults.permissionMode` is nil, not
@@ -168,6 +182,7 @@ public struct Config: Equatable {
         binaries = [:]
         agentState = [:]
         terminalState = [:]
+        betaUpdates = nil
     }
 
     public func profile(id: String) -> Profile? {

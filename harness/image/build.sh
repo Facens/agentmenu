@@ -378,7 +378,14 @@ run_packer_stage() {
         while kill -0 "$packer_pid" 2>/dev/null; do
             sleep 5
             size="$(stat -f %z "$log" 2>/dev/null || echo 0)"
-            current="$(grep -o "Looking for '[^']*'" "$log" 2>/dev/null | tail -n1)"
+            # `|| true`, and it is load-bearing: this subshell inherits the
+            # script's `set -euo pipefail`, grep exits 1 when it matches
+            # nothing, and pipefail hands that to the assignment. Packer's log
+            # carries no "Looking for" line while it starts up, so without this
+            # the watchdog died on its FIRST tick, every run, and neither cap
+            # ever armed. Reproduced directly: the subshell exits 1 before
+            # printing even one iteration.
+            current="$(grep -o "Looking for '[^']*'" "$log" 2>/dev/null | tail -n1 || true)"
             if [ "$current" != "$last_label" ]; then
                 last_label="$current"
                 active_ticks=0
@@ -440,7 +447,11 @@ run_packer_stage "1 (vanilla-tahoe.pkr.hcl)" "$SELF_DIR/vanilla-tahoe.pkr.hcl" s
 # went off is checked by provision.sh in the booted guest, since packer
 # reports this stage as successful whatever csrutil did.
 echo "build.sh: stage 2/3 -- disable-sip.pkr.hcl (recovery-mode csrutil disable; expect roughly 2-4 minutes)"
-run_packer_stage "2 (disable-sip.pkr.hcl)" "$SELF_DIR/disable-sip.pkr.hcl" stage2-packer 300 900 \
+# Stage 2's own defaults are lower than stage 1's (Recovery is far shorter
+# than Setup Assistant), but the documented knobs have to reach it: build.sh's
+# own header and README.md both say they govern BOTH packer stages, and the
+# literals here meant exporting either variable did nothing to this stage.
+run_packer_stage "2 (disable-sip.pkr.hcl)" "$SELF_DIR/disable-sip.pkr.hcl" stage2-packer "${HARNESS_IMAGE_STALL_CAP:-300}" "${HARNESS_IMAGE_STAGE_CAP:-900}" \
     -var "vm_name=$BUILD_VM" \
     || exit 3
 
@@ -515,10 +526,19 @@ vm_exists "$IMAGE_NAME" || { echo "error: '$IMAGE_NAME' is not listed by tart ${
 # out of Time Machine. This cannot reach an arbitrary cloud-sync folder
 # (Dropbox, iCloud Drive), so README.md also tells the maintainer to keep
 # ~/.tart outside any synced folder by hand.
+# No -p: the sticky form needs root and exits 80 ("addexclusion requires root
+# privileges") for the maintainer running this, and 2>&1 swallowed that, so
+# this mitigation had never once applied -- `tmutil isexcluded ~/.tart`
+# reported [Included] after three real builds. The xattr form works unprivileged,
+# is what `isexcluded` reports on, and holds while the directory stays put;
+# only surviving a move needs the sticky one, and that is worth a sudo prompt
+# in a build, not a silent no-op.
 if command -v tmutil >/dev/null 2>&1; then
-    tmutil addexclusion -p "$TART_HOME" >/dev/null 2>&1 \
-        && echo "build.sh: excluded $TART_HOME from Time Machine" \
-        || echo "warning: could not add a Time Machine exclusion for $TART_HOME; add one by hand (see README.md)." >&2
+    if tmutil_err="$(tmutil addexclusion "$TART_HOME" 2>&1)"; then
+        echo "build.sh: excluded $TART_HOME from Time Machine"
+    else
+        echo "warning: could not add a Time Machine exclusion for $TART_HOME (${tmutil_err:-no error text}); add one by hand (see README.md)." >&2
+    fi
 fi
 
 echo "build.sh: ok -- $IMAGE_NAME built from $BUILD_VM (terms_mode=$TERMS_MODE)"

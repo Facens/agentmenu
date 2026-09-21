@@ -188,6 +188,37 @@ build_insert() {
             if [ "$first" -eq 1 ]; then row="$expr"; first=0; else row="$row,$expr"; fi
         done
         values="${values}${values:+,}($row)"
+    # Driving Calendar.app takes TWO grants, not one, and the second only
+    # appears once the first is in place. Measured on a clone on 2026-09-20,
+    # after R10's calendar fixtures failed with
+    #   seed-calendar.applescript: Calendar got an error:
+    #   AppleEvent timed out. (-1712)
+    # which is what an unanswerable consent prompt looks like to a scenario:
+    # osascript hangs, the guest shows a dialog nobody is there to click, and
+    # the fixture times out with no hint of which permission is missing.
+    #
+    #   1. kTCCServiceAppleEvents with com.apple.iCal as the indirect object
+    #      -- permission to CONTROL the app. The guest's own prompt named the
+    #      client: "sshd-keygen-wrapper wants access to control Calendar".
+    #   2. The calendar DATA services. Granting only (1) gets a second,
+    #      different prompt, "sshd-keygen-wrapper would like to add to your
+    #      Calendar", and FullAccess alone does NOT silence it -- a rebuilt
+    #      image with only FullAccess still timed out, and the prompt still
+    #      said "add to". That wording is the WriteOnly service. All three
+    #      spellings are seeded because which one a given macOS asks for is
+    #      its business, not ours to predict: FullAccess, WriteOnly, and the
+    #      pre-Sonoma kTCCServiceCalendar.
+    #
+    # Both are attributed to the SSH client, not to osascript: TCC charges the
+    # responsible process, which over `ssh host osascript ...` is sshd. All
+    # three client spellings are seeded for the same reason the System Events
+    # rows above are -- which one the guest attributes is a property of the
+    # macOS build, not something to guess. osascript is listed too so a script
+    # run from the guest's own Terminal behaves the same.
+    #
+    # This is the app under test's own Calendar grant's opposite number and
+    # must not be confused with it: R4 keeps dev.facens.meetinghop out of this
+    # table entirely, and verify.sh asserts that. These rows are the driver's.
     done <<'GRANTS'
 kTCCServiceAccessibility|/usr/bin/osascript|1||
 kTCCServiceScreenCapture|/usr/bin/osascript|1||
@@ -202,6 +233,18 @@ kTCCServiceAccessibility|com.apple.sshd-session|0||
 kTCCServiceScreenCapture|com.apple.sshd-session|0||
 kTCCServicePostEvent|com.apple.sshd-session|0||
 kTCCServiceAppleEvents|com.apple.sshd-session|0|0|com.apple.systemevents
+kTCCServiceAppleEvents|/usr/bin/osascript|1|0|com.apple.iCal
+kTCCServiceAppleEvents|/usr/libexec/sshd-keygen-wrapper|1|0|com.apple.iCal
+kTCCServiceAppleEvents|com.apple.sshd-session|0|0|com.apple.iCal
+kTCCServiceCalendarsFullAccess|/usr/bin/osascript|1||
+kTCCServiceCalendarsFullAccess|/usr/libexec/sshd-keygen-wrapper|1||
+kTCCServiceCalendarsFullAccess|com.apple.sshd-session|0||
+kTCCServiceCalendarsWriteOnly|/usr/bin/osascript|1||
+kTCCServiceCalendarsWriteOnly|/usr/libexec/sshd-keygen-wrapper|1||
+kTCCServiceCalendarsWriteOnly|com.apple.sshd-session|0||
+kTCCServiceCalendar|/usr/bin/osascript|1||
+kTCCServiceCalendar|/usr/libexec/sshd-keygen-wrapper|1||
+kTCCServiceCalendar|com.apple.sshd-session|0||
 GRANTS
     printf '%s %s;' "$sql" "$values"
 }

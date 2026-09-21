@@ -36,6 +36,53 @@ func runConfigStoreTests(_ t: TestRunner) {
         }
     }
 
+    // MARK: 1b. `[updates] beta`, written only when it is on
+
+    do {
+        let dir = TempDir("configstore-updates")
+        defer { dir.cleanup() }
+        let path = dir.path("config.toml")
+        let store = ConfigStore(url: URL(fileURLWithPath: path))
+
+        var config = Config()
+        t.expect(config.betaUpdates == nil, "a fresh config records no decision about betas")
+
+        config.betaUpdates = true
+        t.expectNoThrow("save config with betas on") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(text.contains("[updates]"), "the section is written")
+            t.expect(text.contains("beta = true"), "and carries the preference")
+        }
+        if let reloaded = t.attempt("reload after turning betas on", { try store.load() }) {
+            t.expectEqual(reloaded, config, "betas on round-trips unchanged")
+        }
+
+        // Off is the absence of the key, not `beta = false`: turning the
+        // preference off leaves the file as it was before it was ever turned
+        // on, rather than accumulating settings nobody typed (KTD2 — the
+        // file is meant to be read and edited by hand).
+        config.betaUpdates = false
+        t.expectNoThrow("save config with betas turned off") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(text.contains("beta = false"), "an explicit no is recorded, not erased")
+        }
+        if let reloaded = t.attempt("reload after turning betas off", { try store.load() }) {
+            t.expectEqual(reloaded, config, "betas off round-trips unchanged")
+        }
+
+        // Back to no decision at all: the section goes with the key, so a
+        // config that never mentions updates is byte-identical to a fresh
+        // one rather than carrying an empty `[updates]`.
+        config.betaUpdates = nil
+        t.expectNoThrow("save config with the decision withdrawn") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(!text.contains("[updates]"), "the empty section is dropped")
+        }
+        if let reloaded = t.attempt("reload after withdrawing the decision", { try store.load() }) {
+            t.expectEqual(reloaded, config, "no decision round-trips unchanged")
+        }
+    }
+
     // MARK: 2. Folder preset: model set, effort absent stays absent
 
     do {

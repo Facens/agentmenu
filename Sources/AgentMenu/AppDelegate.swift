@@ -43,6 +43,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             manifestsRoot: overrides.manifestsUserRoot ?? ManifestRegistry.defaultUserRoot,
             profileRoot: overrides.profileRoot
         )
+        // U10: re-validate every profile's status-line bridge on this
+        // launch rather than trusting a path some earlier launch baked in —
+        // see `revalidateStatuslineBridges()`. After `activate(...)` above,
+        // not before: a stale, non-translocated bridge is rewritten by
+        // running the bundled CLI, which reports through
+        // `HarnessJournal.shared.bridgeInstalled(...)` on its own detached
+        // task — and that task can outrace `activate(...)` on the main
+        // actor if it starts any earlier, landing its event in a journal
+        // that has not started listening yet. Hands off to a detached task
+        // immediately either way, so this line adds no measurable time to
+        // launch.
+        environment.revalidateStatuslineBridges()
+        // Touching the lazy property is what starts Sparkle: an updater
+        // created on the first visit to Settings would never check for
+        // anyone who does not open Settings, which is most people (R12).
+        // It refuses to start on an alpha build or one with no signing key
+        // and says why, in Settings and on stderr.
+        _ = environment.updater
         statusItem = StatusItemController(environment: environment)
         // Pay the Apple Event setup cost now rather than on the first click.
         FinderTarget.warmUp()
@@ -54,6 +72,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the responder chain for a private selector and accepted silence.
     func showSettings() {
         settingsWindow.show()
+    }
+
+    /// The About panel, from the status item's menu.
+    ///
+    /// AppKit's standard panel rather than a window of our own: it reads the
+    /// bundle's name, icon and version itself, so the only thing worth adding
+    /// is the licence and where the source is. `activate` first — an accessory
+    /// app has no Dock icon to bring it forward, and the panel would open
+    /// behind whatever the user was looking at.
+    func showAbout() {
+        NSApp.activate(ignoringOtherApps: true)
+        let credits = NSMutableAttributedString(
+            string: "Free software under the GPL-3.0-or-later.\nhttps://github.com/Facens/agentmenu",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 
     /// Opening the app again when it is already running — from Finder, from

@@ -354,6 +354,34 @@ _scenario_clear_screenrecording() {
 }
 
 # ---------------------------------------------------------------------------
+# clear_quarantine <app-name>
+#
+# Removes com.apple.quarantine from /Applications/<app>.app and relaunches it.
+# Call this once, right after the Gatekeeper sheet has been answered.
+#
+# This is not a shortcut past Gatekeeper -- it reproduces what answering it in
+# Finder already does. When a person consents, LaunchServices clears the flag
+# and the app runs from /Applications. Our install path does not get that:
+# install.sh moves the bundle with `mv` from a shell, so after consent the
+# xattr is still there (its flags change 0083 -> 00c3, recording the consent,
+# but the attribute remains) and macOS keeps running the app TRANSLOCATED,
+# from a randomised read-only /private/var/folders/.../AppTranslocation/ path.
+#
+# Measured on a clean clone, 2026-09-20: after answering Open, MeetingHop ran
+# from AppTranslocation; clearing the xattr and relaunching moved it to
+# /Applications. A translocated bundle has no stable identity for TCC, so a
+# scenario that depends on any per-app permission is testing a state no real
+# user is ever in.
+clear_quarantine() {
+    local app_name="${1:?clear_quarantine requires the app name, e.g. MeetingHop.}"
+    _scenario_refuse_screen "clear_quarantine"
+    local app="/Applications/${app_name}.app"
+    guest_run "$HARNESS_GUEST_IP" "pkill -x $(_scenario_quote "$app_name") 2>/dev/null; xattr -dr com.apple.quarantine $(_scenario_path_arg "$app") 2>/dev/null; nohup open $(_scenario_path_arg "$app") >/dev/null 2>&1 &" >/dev/null 2>&1 || true
+    log "cleared the quarantine attribute and relaunched $app_name from /Applications (Finder does this on consent; a shell mv does not, and the app runs translocated until it happens)"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # shot <label>
 #
 # Captures a screenshot via guest/shot.sh in the guest, brings it back to
@@ -633,19 +661,33 @@ journal_at() {
     log "journal_at: $HARNESS_GUEST_JOURNAL"
 }
 
-expect_event() {
-    local name="${1:?expect_event requires an event name.}"
-    shift || true
+# _scenario_wait_for_event <name> <timeout> [field=value]...
+#
+# The polling mechanics expect_event and confirm_dialog both need, factored
+# out so there is exactly one place that drives guest/wait.sh: builds its
+# command line, runs it bounded by <timeout> (a caller's own bound, not
+# necessarily $HARNESS_STEP_TIMEOUT — confirm_dialog below uses a much
+# shorter one per attempt), and pulls the journal back to the host whether
+# it matched or not, so the host copy grows alongside the guest's
+# regardless of which caller is asking. Returns wait.sh's own exit code
+# (0 matched, printed on stdout; 1 timed out; 2 usage error; 3 the journal
+# path is a driver problem) rather than deciding what it means — that is
+# each caller's job: expect_event fails the scenario outright on anything
+# but 0, confirm_dialog treats a 1 as "try clicking again."
+_scenario_wait_for_event() {
+    local name="${1:?_scenario_wait_for_event requires an event name.}"
+    local timeout="${2:?_scenario_wait_for_event requires a timeout.}"
+    shift 2
     local journal_arg
     if [ -n "${HARNESS_GUEST_JOURNAL:-}" ]; then
         journal_arg="$HARNESS_GUEST_JOURNAL"
     else
-        _scenario_harness_error "expect_event: no journal path is set; call journal_at <bundle-id> <leaf-name> first, or set HARNESS_GUEST_JOURNAL."
+        _scenario_harness_error "_scenario_wait_for_event: no journal path is set; call journal_at <bundle-id> <leaf-name> first, or set HARNESS_GUEST_JOURNAL."
     fi
     local cmd="bash $(_scenario_path_arg "$(_scenario_guest_path guest/wait.sh)")"
     cmd="$cmd --journal $(_scenario_path_arg "$journal_arg")"
     cmd="$cmd --event $(_scenario_quote "$name")"
-    cmd="$cmd --timeout $HARNESS_STEP_TIMEOUT"
+    cmd="$cmd --timeout $timeout"
     if [ "${HARNESS_TIER:-}" != "app-fresh" ]; then
         local shot_dir_arg
         if [ "$HARNESS_GUEST_TRANSPORT" = "local" ]; then
@@ -659,12 +701,12 @@ expect_event() {
     for kv in "$@"; do
         case "$kv" in
             *=*) cmd="$cmd --field $(_scenario_quote "$kv")" ;;
-            *) _scenario_harness_error "expect_event: field arguments must be key=value, got '$kv'." ;;
+            *) _scenario_harness_error "_scenario_wait_for_event: field arguments must be key=value, got '$kv'." ;;
         esac
     done
 
     local out rc=0
-    if out="$(bounded_run "$((HARNESS_STEP_TIMEOUT + _HARNESS_TIMEOUT_GRACE))" guest_run "$HARNESS_GUEST_IP" "$cmd")"; then
+    if out="$(bounded_run "$((timeout + _HARNESS_TIMEOUT_GRACE))" guest_run "$HARNESS_GUEST_IP" "$cmd")"; then
         rc=0
     else
         rc=$?
@@ -676,6 +718,21 @@ expect_event() {
         cp "$HARNESS_GUEST_JOURNAL" "$HARNESS_JOURNAL" 2>/dev/null || true
     fi
 
+    if [ "$rc" -eq 0 ]; then
+        printf '%s\n' "$out"
+    fi
+    return "$rc"
+}
+
+expect_event() {
+    local name="${1:?expect_event requires an event name.}"
+    shift || true
+    local out rc=0
+    if out="$(_scenario_wait_for_event "$name" "$HARNESS_STEP_TIMEOUT" "$@")"; then
+        rc=0
+    else
+        rc=$?
+    fi
     case "$rc" in
         0)
             log "expect_event: $name matched"
@@ -688,6 +745,94 @@ expect_event() {
             _scenario_harness_error "expect_event: waiting for '$name' failed in the guest (exit $rc)."
             ;;
     esac
+}
+
+# ---------------------------------------------------------------------------
+# confirm_dialog <kind> <allow|deny> <event> [field=value]...
+#
+# Answers a system dialog and does not call it answered until the app's own
+# journal says so — a click succeeding and the state it was meant to
+# produce actually landing turned out to be two different facts, not one.
+#
+# Measured directly (2026-09-21, diagnosed on a hand-driven probe of the
+# exact install-then-relaunch sequence, never reproduced on demand — see
+# docs/plans/2026-09-18-first-run-sandbox-harness-research-notes.md's dated
+# addendum for the full evidence): EventKit/TCC resolve a calendar grant in
+# 10-50ms once genuinely triggered; the translocated first launch never
+# touches Calendar TCC at all, confirmed at the OS's own accounting, not
+# just the app's; no crash, ever, in either instance; and yet
+# dialogs.applescript occasionally reports a clean "Allow Full Access" (or
+# "Don't Allow") click that the app's own journal never follows up on — 3
+# times in 11 runs this unit saw, never once caught in the act despite
+# instrumented, repeated attempts to catch it. Nothing about the delay is
+# in the app, so widening a timeout would only make the same silent gap
+# take longer to fail. The fix is the rule this whole file otherwise
+# already follows for everything else a scenario waits on: assert the
+# state the app reports, never the action the driver took.
+#
+# Each attempt: wait for the dialog (bounded by $HARNESS_CONFIRM_TIMEOUT,
+# default 10s — short on purpose, comfortably above the 10-50ms this
+# resolves in when it works, and never widened to paper over a real hang),
+# click it if present (a dialog that never appears is not itself a failure
+# here — see wait_for_status_item's own sibling scenarios, where "already
+# granted, nothing to click" is a legitimate path; a caller that needs the
+# dialog to have appeared, e.g. access-denied.sh, checks that itself before
+# calling this), then wait the same short bound for <event> — every field
+# matching — to appear in the journal. Up to three attempts total. Every
+# attempt after the first is logged, at the supervisor level, before it
+# runs, and a finding records exactly how many attempts a passing run
+# needed (dialog-confirm-retry-2 / dialog-confirm-retry-3, harness/
+# findings.txt) — a run that quietly needs three clicks routinely is a
+# signal worth seeing, not a coincidence to average away. On the third
+# miss, a probe of whatever dialogs.applescript can currently see is
+# folded into the failure message alongside the attempt count, so a
+# genuine hang still fails loudly and diagnosably rather than being
+# retried into either a false pass or a generic timeout.
+confirm_dialog() {
+    local kind="${1:?confirm_dialog requires a dialog kind.}"
+    local choice="${2:?confirm_dialog requires allow or deny.}"
+    local event="${3:?confirm_dialog requires an event name.}"
+    shift 3
+    _scenario_refuse_screen "confirm_dialog"
+    local timeout="${HARNESS_CONFIRM_TIMEOUT:-10}"
+    local max_attempts=3
+    local attempt wait_json out rc probe_json
+    for attempt in 1 2 3; do
+        wait_json="$(dialog wait "$kind" "$timeout")"
+        if [ "$(printf '%s' "$wait_json" | jq -r '.present')" = "true" ]; then
+            shot "${kind}-prompt" > /dev/null
+            dialog answer "$kind" "$choice" > /dev/null
+        else
+            log "confirm_dialog: $kind did not prompt on attempt $attempt/$max_attempts"
+        fi
+
+        out=""
+        rc=0
+        if out="$(_scenario_wait_for_event "$event" "$timeout" "$@")"; then
+            rc=0
+        else
+            rc=$?
+        fi
+
+        if [ "$rc" -eq 0 ]; then
+            if [ "$attempt" -gt 1 ]; then
+                log "confirm_dialog: $kind $choice confirmed by '$event' on attempt $attempt/$max_attempts"
+                finding "dialog-confirm-retry-$attempt"
+            fi
+            printf '%s\n' "$out"
+            return 0
+        fi
+        if [ "$rc" -ne 1 ]; then
+            _scenario_harness_error "confirm_dialog: waiting for '$event' failed in the guest (exit $rc)."
+        fi
+
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            probe_json="$(dialog probe 2>/dev/null || echo '{}')"
+            log "confirm_dialog: attempt $attempt/$max_attempts answered $kind $choice but '$event' did not appear within ${timeout}s — retrying; probe saw: $probe_json"
+        fi
+    done
+    probe_json="$(dialog probe 2>/dev/null || echo '{}')"
+    _scenario_fail "confirm_dialog: '$event' never appeared after $max_attempts attempts to answer $kind $choice; last probe saw: $probe_json"
 }
 
 # ---------------------------------------------------------------------------

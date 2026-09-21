@@ -11,6 +11,7 @@ func runStatuslineBridgeTests(_ t: TestRunner) {
     runThrottleTests(t)
     runHistoryTests(t)
     runBridgeScriptTests(t)
+    runBridgeRevalidationTests(t)
     runSettingsUpdateTests(t)
     runInstallStatuslineCLITests(t)
     runFailureModeTests(t)
@@ -512,6 +513,150 @@ private func runBridgeScriptTests(_ t: TestRunner) {
     t.expectEqual(StatuslineBridge.existingChain(inScript: emptyChainScript), "", "no chain configured round-trips as an empty string, not nil")
 
     t.expect(StatuslineBridge.existingChain(inScript: "no --chain marker here") == nil, "a script without the marker yields nil")
+}
+
+// MARK: - Re-validation (U10): installedCLIPath parsing and BridgeState
+
+private func runBridgeRevalidationTests(_ t: TestRunner) {
+    // --- installedCLIPath(inScript:), against the quoting shapes bridgeScript
+    // can actually produce ---
+
+    let plainScript = StatuslineBridge.bridgeScript(
+        cliPath: "/Applications/AgentMenu.app/Contents/Resources/bin/agentmenu",
+        profileDirectory: "/Users/x/.claude",
+        chain: ""
+    )
+    t.expectEqual(
+        StatuslineBridge.installedCLIPath(inScript: plainScript),
+        "/Applications/AgentMenu.app/Contents/Resources/bin/agentmenu",
+        "an ordinary cli path round-trips through the parser"
+    )
+
+    // A bundle path with an embedded single quote (a folder named "Andrea's
+    // Apps", say) round-trips through the same '\'' escape dance the chain
+    // parser already proves out above — one writer, one escaping rule, two
+    // readers.
+    let quotedPathScript = StatuslineBridge.bridgeScript(
+        cliPath: "/Users/x/Andrea's Apps/AgentMenu.app/Contents/Resources/bin/agentmenu",
+        profileDirectory: "/Users/x/.claude",
+        chain: "bash \"/Users/x/.claude/statusline.sh\""
+    )
+    t.expectEqual(
+        StatuslineBridge.installedCLIPath(inScript: quotedPathScript),
+        "/Users/x/Andrea's Apps/AgentMenu.app/Contents/Resources/bin/agentmenu",
+        "a cli path with an embedded single quote round-trips"
+    )
+
+    // The chain's own quoted argument comes after the cli path's on the same
+    // line — parsing must stop at the cli path's own closing quote rather
+    // than running on into the chain.
+    let chainAfterPathScript = StatuslineBridge.bridgeScript(
+        cliPath: "/bin/agentmenu", profileDirectory: "/x", chain: "it's a chain too"
+    )
+    t.expectEqual(
+        StatuslineBridge.installedCLIPath(inScript: chainAfterPathScript),
+        "/bin/agentmenu",
+        "the parser stops at the cli path's own closing quote and does not run into the chain"
+    )
+
+    t.expect(
+        StatuslineBridge.installedCLIPath(inScript: "no exec line here") == nil,
+        "text with no exec marker yields nil"
+    )
+
+    // --- bridgeState(scriptContents:expectedCLIPath:fileExists:) ---
+
+    let currentCLIPath = "/Applications/AgentMenu.app/Contents/Resources/bin/agentmenu"
+    let currentScript = StatuslineBridge.bridgeScript(
+        cliPath: currentCLIPath, profileDirectory: "/Users/x/.claude", chain: ""
+    )
+
+    t.expectEqual(
+        StatuslineBridge.bridgeState(scriptContents: nil, expectedCLIPath: currentCLIPath),
+        .absent,
+        "no script installed for the profile reports absent"
+    )
+
+    t.expectEqual(
+        StatuslineBridge.bridgeState(
+            scriptContents: currentScript, expectedCLIPath: currentCLIPath, fileExists: { _ in true }
+        ),
+        .current,
+        "a script whose baked path still exists and matches the expected one is current"
+    )
+
+    // Scenario (plan): "A bridge written from one bundle location still
+    // resolves after the bundle is moved." The move itself is detected as
+    // staleness — installed path differs from where this launch now sits,
+    // and the old location is gone entirely (the whole bundle moved, it
+    // didn't leave a copy behind) — and "still resolves" is what the
+    // caller's rewrite (simulated here the same way installStatusLine
+    // would do it, by calling bridgeScript again with the new path)
+    // restores: re-checking the freshly-written script against the new
+    // location reports current again.
+    let movedCLIPath = "/Users/x/Applications/AgentMenu.app/Contents/Resources/bin/agentmenu"
+    t.expectEqual(
+        StatuslineBridge.bridgeState(
+            scriptContents: currentScript, expectedCLIPath: movedCLIPath, fileExists: { $0 == movedCLIPath }
+        ),
+        .stale(installed: currentCLIPath, expected: movedCLIPath),
+        "a script written for a bundle location the app no longer runs from is stale after the bundle moves"
+    )
+    let rewrittenScript = StatuslineBridge.bridgeScript(
+        cliPath: movedCLIPath, profileDirectory: "/Users/x/.claude", chain: ""
+    )
+    t.expectEqual(
+        StatuslineBridge.bridgeState(
+            scriptContents: rewrittenScript, expectedCLIPath: movedCLIPath, fileExists: { $0 == movedCLIPath }
+        ),
+        .current,
+        "the bridge resolves again once rewritten for the bundle's new location"
+    )
+
+    // A baked path that still names the *right* bundle location textually,
+    // but the file underneath is simply gone (a half-finished reinstall, a
+    // volume that unmounted) — differs from the "moved" case above in that
+    // the paths are equal; only existence fails.
+    t.expectEqual(
+        StatuslineBridge.bridgeState(
+            scriptContents: currentScript, expectedCLIPath: currentCLIPath, fileExists: { _ in false }
+        ),
+        .stale(installed: currentCLIPath, expected: currentCLIPath),
+        "a matching path that no longer exists on disk is stale, not current"
+    )
+
+    // Scenario (plan): "A bridge written while translocated is detected as
+    // stale on the next non-translocated launch." The translocation mount
+    // is gone by the time the ordinary launch runs, so the baked path is
+    // both different from and absent for the real one — bridgeState reports
+    // stale either way; deciding whether to rewrite it is the caller's job
+    // (AppEnvironment.revalidateStatuslineBridges), which is why this test
+    // only asserts the state, not an install.
+    let translocatedCLIPath = "/private/var/folders/zz/abc/T/AppTranslocation/9C4D2A1E-1/d/AgentMenu.app/Contents/Resources/bin/agentmenu"
+    let translocatedScript = StatuslineBridge.bridgeScript(
+        cliPath: translocatedCLIPath, profileDirectory: "/Users/x/.claude", chain: ""
+    )
+    t.expectEqual(
+        StatuslineBridge.bridgeState(
+            scriptContents: translocatedScript, expectedCLIPath: currentCLIPath, fileExists: { $0 == currentCLIPath }
+        ),
+        .stale(installed: translocatedCLIPath, expected: currentCLIPath),
+        "a bridge written while translocated is detected as stale on the next, non-translocated launch"
+    )
+
+    // The default `fileExists` probe is the real filesystem — /bin/sh is as
+    // safe a standing executable as this suite can assume on any Mac.
+    let realScript = StatuslineBridge.bridgeScript(cliPath: "/bin/sh", profileDirectory: "/x", chain: "")
+    t.expectEqual(
+        StatuslineBridge.bridgeState(scriptContents: realScript, expectedCLIPath: "/bin/sh"),
+        .current,
+        "the default existence probe accepts a path that is genuinely executable"
+    )
+    t.expectEqual(
+        StatuslineBridge.bridgeState(scriptContents: realScript, expectedCLIPath: "/no/such/binary-at-all"),
+        .stale(installed: "/bin/sh", expected: "/no/such/binary-at-all"),
+        "the default existence probe reports stale against a path with nothing on disk"
+    )
 }
 
 // MARK: - settings.json update (happy / edge / error)

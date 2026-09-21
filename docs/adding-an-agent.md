@@ -106,7 +106,23 @@ disable_args = ["--settings", "{\"advisorModel\":\"\"}"]  # optional. How to tur
                                                           # becomes enable-only, and the off
                                                           # switch is not shown.
 seed_from_settings = "advisorModel"
+rank_order = ["sonnet", "opus", "fable"]  # optional. The agent's models weakest first, for an
+                                          # agent that refuses to let a weaker model advise a
+                                          # stronger one. Declare it and every [model].values and
+                                          # [advisor].values entry must appear in it, or the
+                                          # manifest is rejected — a model ranked nowhere is a
+                                          # model the rule would skip. Omit it and every pairing
+                                          # is accepted.
 ```
+
+**A value can be refused for the company it keeps.** Claude Code accepts `opus`
+as an advisor and `fable` as a model, and refuses the two together: `"opus"
+cannot advise "claude-fable-5-1" (the advisor must be at least as capable as the
+main model)`, after which it runs with no advisor at all. `rank_order` is how a
+manifest says so, and AgentMenu then **raises** the advisor to a model that
+reaches the main model's class rather than dropping the flag — dropping it would
+hand the decision back to `advisorModel` in the agent's own settings file, which
+is where the weaker advisor usually came from.
 
 **Values are validated before launch, not after.** Claude Code, for instance,
 answers an unknown `--effort` value with a warning and then quietly uses its

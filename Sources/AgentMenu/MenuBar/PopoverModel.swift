@@ -76,6 +76,32 @@ final class PopoverModel: ObservableObject {
         environment.$saveFailure
             .sink { [weak self] failure in if let failure { self?.failure = failure } }
             .store(in: &cancellables)
+        // An update that finished downloading while the popover was closed
+        // is exactly the case the footer row exists for, so the view has to
+        // be told when it lands (R18).
+        environment.$updatePending
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Updates (U11)
+
+    /// An update is downloaded and waiting for the user to act (R18).
+    var updatePending: Bool { environment.updatePending }
+
+    /// Whether this app may update itself at all — false for a local alpha
+    /// build and for one that carries no signing key, which is what keeps
+    /// the footer from offering a check that can never find anything.
+    var canCheckForUpdates: Bool { environment.updater.refusal == nil }
+
+    func checkForUpdates() { environment.updater.checkForUpdates() }
+
+    /// True while Gatekeeper is running this copy from its randomized
+    /// read-only mount. Sparkle cannot replace a bundle there, and the
+    /// status-line bridge cannot be written from there either (R26) — so
+    /// the popover says so, permanently, until the app is moved.
+    var isTranslocated: Bool {
+        BundleTranslocation.isTranslocated(bundlePath: Bundle.main.bundleURL.path)
     }
 
     // MARK: Derived state

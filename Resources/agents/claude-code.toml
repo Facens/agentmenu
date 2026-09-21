@@ -54,6 +54,15 @@ bypass_values = ["bypassPermissions", "dontAsk"]
 # rank in the model catalog.
 flag = "--advisor"
 values = ["opus", "sonnet", "fable"]
+# The binary refuses an advisor weaker than the main model: `--model fable
+# --advisor opus` answers `"opus" cannot advise "claude-fable-5-1" (the advisor
+# must be at least as capable as the main model). The advisor will not be used
+# for the main model.` and runs unadvised. These ranks are the `advisor_rank`
+# field of the binary's own baked model catalog, read out of 2.1.278 on
+# 2026-09-21 for the model each alias resolves to — sonnet claude-sonnet-5,
+# opus claude-opus-5, fable claude-fable-5-1 (3, 4 and 5). Equal ranks pair: `--model fable
+# --advisor fable` was executed the same day and ran without the warning.
+rank_order = ["sonnet", "opus", "fable"]
 # Verified 2026-09-09: --settings overrides the profile's settings.json, and the
 # binary treats an empty advisorModel as unset, so this pair turns the advisor
 # off for one session without touching the profile.

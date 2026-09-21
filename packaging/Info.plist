@@ -12,6 +12,12 @@
 	<string>AgentMenu</string>
 	<key>CFBundleDisplayName</key>
 	<string>AgentMenu</string>
+	<!-- The copyright line of the standard About panel, which the status
+	     item's menu opens. Without this key the panel shows a version and
+	     nothing else. Same statement as the SPDX header on every source
+	     file. -->
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Andrea Giannangelo. GPL-3.0-or-later.</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -26,5 +32,41 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>AgentMenu asks Finder for the front window's folder, and asks your terminal to open a tab and run the agent.</string>
+	<!--
+	Sparkle (U11 / R12, R14). The feed is served from the public
+	repository's gh-pages branch, which is outside the blast radius of
+	packaging/publish-public.sh — that script replaces the public working
+	tree wholesale on every sync and would delete a feed kept on main
+	(KTD6). The URL is frozen into every build that ships with it, which
+	also freezes the public repository's name.
+	-->
+	<key>SUFeedURL</key>
+	<string>https://facens.github.io/agentmenu/appcast.xml</string>
+	<!--
+	The public half of the project's EdDSA key, generated 2026-09-21 with
+	Sparkle 2.10.0's generate_keys (U12). It is never regenerated: every
+	shipped binary carries it, so a new key pair would orphan every
+	installed copy. Its private half lives in 1Password and, for the
+	promotion job, as the SPARKLE_EDDSA_PRIVATE_KEY secret of the
+	release-promotion environment — see docs/releasing.md.
+
+	The app still refuses to start the updater when this value is empty
+	rather than checking a feed whose signatures it could not verify: a
+	build produced before provisioning must not quietly update itself.
+	-->
+	<key>SUPublicEDKey</key>
+	<string>JUHhLpaZMNYd+8iN2sfLV2Ll/0UpqQPoTlzQPSKVIqE=</string>
+	<!--
+	R14: present, and true, so no update-permission prompt appears on the
+	second launch. Sparkle asks that question only when the key is absent;
+	answering it here is what keeps a menu-bar app from opening a dialog
+	the user never asked for. KTD9: both checking and installing are
+	automatic by default, which is what the maintainer asked for, and the
+	promotion gate is the human check that replaces the one this removes.
+	-->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
 </dict>
 </plist>

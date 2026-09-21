@@ -118,12 +118,26 @@ public struct AdvisorSpec: Equatable, Sendable {
     /// UI hides the off control.
     public let disableArgs: [String]
     public let seedFromSettings: String?
+    /// R50: the agent's models in ascending order of capability, weakest
+    /// first. An agent that refuses to let a weaker model advise a stronger
+    /// one declares the order here; an empty list means the agent accepts any
+    /// pairing and no advisor is ever raised. A list, not a map of numbers,
+    /// because the serializer promotes a nested table to its own `[section]`
+    /// and a manifest must round-trip byte-identically.
+    public let rankOrder: [String]
 
-    public init(flag: String, values: [String], disableArgs: [String] = [], seedFromSettings: String? = nil) {
+    public init(
+        flag: String,
+        values: [String],
+        disableArgs: [String] = [],
+        seedFromSettings: String? = nil,
+        rankOrder: [String] = []
+    ) {
         self.flag = flag
         self.values = values
         self.disableArgs = disableArgs
         self.seedFromSettings = seedFromSettings
+        self.rankOrder = rankOrder
     }
 
     public func accepts(_ value: String) -> Bool {
@@ -131,6 +145,33 @@ public struct AdvisorSpec: Equatable, Sendable {
     }
 
     public var canDisable: Bool { !disableArgs.isEmpty }
+
+    public func rank(of model: String) -> Int? { rankOrder.firstIndex(of: model) }
+
+    /// R50: the advisor to send instead of `chosen` so the agent accepts the
+    /// pairing, or nil when `chosen` already reaches `mainModel`'s class, when
+    /// either side is unranked, or when no declared advisor reaches it.
+    ///
+    /// The main model itself is preferred when the agent accepts it as an
+    /// advisor: a model always reaches its own class, and equal ranks were
+    /// executed against the binary (`--model fable --advisor fable`, 2026-09-21)
+    /// rather than inferred from the refusal's wording. Otherwise the weakest
+    /// advisor that still reaches the class wins, so raising costs as little as
+    /// the rule allows, with the name breaking a rank tie to keep the result
+    /// deterministic.
+    public func raised(_ chosen: String, toAtLeast mainModel: String) -> String? {
+        guard let chosenRank = rank(of: chosen), let required = rank(of: mainModel), chosenRank < required else {
+            return nil
+        }
+        if accepts(mainModel) { return mainModel }
+        let candidates = values.compactMap { value -> (value: String, rank: Int)? in
+            guard let rank = rank(of: value), rank >= required else { return nil }
+            return (value, rank)
+        }
+        return candidates.min { lhs, rhs in
+            lhs.rank == rhs.rank ? lhs.value < rhs.value : lhs.rank < rhs.rank
+        }?.value
+    }
 }
 
 /// How a profile (an account) reaches the agent: as an environment variable
@@ -265,6 +306,23 @@ public struct AgentManifest: Equatable, Sendable {
         let effort = try ManifestParsing.flagSpec(root, section: "effort", id: id)
         let permissionMode = try ManifestParsing.permissionSpec(root, id: id)
         let advisor = try ManifestParsing.advisorSpec(root, id: id)
+
+        // R50: a declared rank order must cover every model that can be
+        // compared against it — each advisor value and each main-model value.
+        // A value ranked nowhere is a value the advisor rule silently skips,
+        // which is how a pairing the agent refuses would reach the binary
+        // again; missing coverage is a manifest error, not a quiet default.
+        if let advisor, !advisor.rankOrder.isEmpty {
+            let comparable = advisor.values + (model?.values ?? [])
+            let unranked = comparable.filter { advisor.rank(of: $0) == nil }
+            guard unranked.isEmpty else {
+                throw ManifestError.invalidValue(
+                    key: "advisor.rank_order",
+                    value: Array(Set(unranked)).sorted().joined(separator: ", "),
+                    reason: "must rank every advisor value and every model value"
+                )
+            }
+        }
 
         // R45: a static-argument field may not smuggle a value declared
         // under permission_mode.values past the structured field the
@@ -535,6 +593,22 @@ enum ManifestParsing {
             table, "disable_args", section: section, id: id, default: []
         )
         let seed = optionalString(table, "seed_from_settings")
-        return AdvisorSpec(flag: flag, values: values, disableArgs: disableArgs, seedFromSettings: seed)
+        // R50: `rank_order = ["sonnet", "opus", "fable"]` — the agent's models
+        // weakest first. Absent means the agent accepts any advisor for any
+        // model; an empty list says the same thing explicitly.
+        let rankOrder = try optionalTableStringArray(
+            table, "rank_order", section: section, id: id, default: []
+        )
+        let duplicates = Set(rankOrder.filter { name in rankOrder.filter { $0 == name }.count > 1 })
+        guard duplicates.isEmpty else {
+            throw ManifestError.invalidValue(
+                key: "\(section).rank_order",
+                value: duplicates.sorted().joined(separator: ", "),
+                reason: "names a model twice — a model has one rank"
+            )
+        }
+        return AdvisorSpec(
+            flag: flag, values: values, disableArgs: disableArgs, seedFromSettings: seed, rankOrder: rankOrder
+        )
     }
 }

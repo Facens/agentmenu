@@ -729,6 +729,7 @@ func runManifestRegistryTests(_ t: TestRunner) {
         values = ["opus", "sonnet"]
         disable_args = ["--no-advisor"]
         seed_from_settings = "advisorModel"
+        rank_order = ["sonnet", "small", "opus", "large"]
         """
         if let manifest = t.attempt("parse a manifest setting every documented key", { try AgentManifest.parse(everyKeyText, origin: .bundled) }) {
             t.expectEqual(manifest.id, "every-key", "id landed")
@@ -758,8 +759,14 @@ func runManifestRegistryTests(_ t: TestRunner) {
             )
             t.expectEqual(
                 manifest.advisor,
-                AdvisorSpec(flag: "--advisor", values: ["opus", "sonnet"], disableArgs: ["--no-advisor"], seedFromSettings: "advisorModel"),
-                "[advisor] landed, including disable_args and seed_from_settings"
+                AdvisorSpec(
+                    flag: "--advisor",
+                    values: ["opus", "sonnet"],
+                    disableArgs: ["--no-advisor"],
+                    seedFromSettings: "advisorModel",
+                    rankOrder: ["sonnet", "small", "opus", "large"]
+                ),
+                "[advisor] landed, including disable_args, seed_from_settings and rank_order"
             )
 
             let profileDir = URL(fileURLWithPath: "/Users/x/.config/every-key")
@@ -976,4 +983,108 @@ func runManifestRegistryTests(_ t: TestRunner) {
             try AgentManifest.parse(text, origin: .bundled)
         }
     }
+
+    // MARK: 18. R50 — [advisor].rank_order parses, and must cover every value it
+    // will be compared against. The rule it feeds is what stops AgentMenu
+    // from launching `--model fable --advisor opus`, a pairing Claude Code
+    // refuses outright.
+
+    do {
+        let ranked = """
+        schema = 1
+        id = "ranked"
+        display_name = "Ranked"
+        binary = "r"
+
+        [model]
+        flag = "--model"
+        values = ["small", "large"]
+
+        [advisor]
+        flag = "--advisor"
+        values = ["small", "large"]
+        rank_order = ["small", "large"]
+        """
+        if let manifest = t.attempt("parse a manifest declaring an advisor rank order", { try AgentManifest.parse(ranked, origin: .bundled) }) {
+            t.expectEqual(manifest.advisor?.rankOrder, ["small", "large"], "rank_order landed on the advisor spec")
+            t.expectEqual(manifest.advisor?.rank(of: "large"), 1, "rank(of:) is the position in the declared order")
+            t.expectEqual(manifest.advisor?.rank(of: "unknown"), nil, "an unranked model has no rank")
+            t.expectEqual(
+                manifest.advisor?.raised("small", toAtLeast: "large"), "large",
+                "a weaker advisor is raised to the main model's own class"
+            )
+            t.expectEqual(
+                manifest.advisor?.raised("large", toAtLeast: "small"), nil,
+                "a stronger advisor is left alone — raising is one-directional"
+            )
+            t.expectEqual(
+                manifest.advisor?.raised("large", toAtLeast: "large"), nil,
+                "equal ranks pair, so nothing is raised"
+            )
+            t.expectEqual(
+                manifest.advisor?.raised("small", toAtLeast: "unranked"), nil,
+                "an unranked main model is never compared — the rule needs both ranks"
+            )
+        }
+
+        let unranked = """
+        schema = 1
+        id = "unranked-model-value"
+        display_name = "Unranked"
+        binary = "r"
+
+        [model]
+        flag = "--model"
+        values = ["small", "huge"]
+
+        [advisor]
+        flag = "--advisor"
+        values = ["small"]
+        rank_order = ["small"]
+        """
+        do {
+            _ = try AgentManifest.parse(unranked, origin: .bundled)
+            t.expect(false, "a model value missing from a declared rank order should be rejected")
+        } catch let error as ManifestError {
+            if case .invalidValue(let key, let value, _) = error {
+                t.expectEqual(key, "advisor.rank_order", "the offending key is named")
+                t.expectEqual(value, "huge", "the unranked value is named")
+            } else {
+                t.expect(false, "wrong error case for an unranked model value: \(error)")
+            }
+        } catch {
+            t.expect(false, "wrong error type for an unranked model value: \(error)")
+        }
+
+        let rankedTwice = """
+        schema = 1
+        id = "ranked-twice"
+        display_name = "Ranked Twice"
+        binary = "r"
+
+        [advisor]
+        flag = "--advisor"
+        values = ["small"]
+        rank_order = ["small", "small"]
+        """
+        t.expectThrows("a model named twice in rank_order is rejected") {
+            try AgentManifest.parse(rankedTwice, origin: .bundled)
+        }
+
+        // The shipped manifest carries the order read out of the binary's own
+        // model catalog, so the rule is live and not only fixture-deep.
+        let claudeCodeURL = repositoryResourcesRoot.appendingPathComponent("agents/claude-code.toml")
+        if let text = try? String(contentsOf: claudeCodeURL, encoding: .utf8),
+           let claudeCode = t.attempt("parse the real claude-code manifest for its rank order", { try AgentManifest.parse(text, origin: .bundled) }) {
+            t.expectEqual(
+                claudeCode.advisor?.raised("opus", toAtLeast: "fable"), "fable",
+                "opus cannot advise fable, so the shipped manifest raises the advisor to fable"
+            )
+            t.expectEqual(
+                claudeCode.advisor?.raised("opus", toAtLeast: "sonnet"), nil,
+                "opus outranks sonnet, so an opus advisor stands"
+            )
+        }
+    }
+
 }
