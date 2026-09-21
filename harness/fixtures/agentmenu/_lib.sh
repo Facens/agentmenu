@@ -34,25 +34,58 @@ AGENTMENU_JOURNAL_LEAF="run.ndjson"
 # `~/dev` and `AccessibilityID.pathHash` then hashes.
 AGENTMENU_CHECKOUT_LEAF="dev/harness-project"
 
-# fx_activate_journal <nonce>
+# fx_activate_harness_taps <nonce>
 #
-# KTD3/KTD4: on a real Finder launch (how harness/guest/install.sh's own
-# `open` starts the app on the stranger tier — no `-AgentMenuHarness YES`
-# argument ever reaches it, so `Overrides.forGUI()`'s isolation gate stays
-# closed and every path resolves to its ordinary, non-isolated default,
-# `Sources/AgentMenuKit/Config/Overrides.swift`), the journal hook itself is
-# a *separate*, ungated mechanism: `HarnessJournal.activate` reads the
-# `harnessJournal` key straight out of `UserDefaults.standard`
-# (`Sources/AgentMenuKit/Harness/Journal.swift`), which is exactly the
-# domain `defaults write` edits. Writing both keys here, before the app is
-# ever installed or opened, is what turns the journal on for a scenario
-# that never passes a launch argument at all — skip this and every
-# `expect_event` in every scenario times out identically, for a reason
-# none of them would explain.
-fx_activate_journal() {
-    local nonce="${1:?fx_activate_journal requires the run nonce.}"
+# Turns on both of the app's read-only harness taps, in the one domain a
+# fixture can reach before the app has ever been launched. Called by every
+# AgentMenu fixture, including the ones that plant nothing: a scenario that
+# has one tap and not the other is a scenario whose result depends on what
+# the window server happened to do, which is the whole point of not having
+# to remember to call two functions.
+#
+# `harnessJournal` / `harnessNonce` — KTD3/KTD4: on a real Finder launch
+# (how harness/guest/install.sh's own `open` starts the app on the stranger
+# tier), the journal hook is a *separate*, ungated mechanism:
+# `HarnessJournal.activate` reads the `harnessJournal` key straight out of
+# `UserDefaults.standard` (`Sources/AgentMenuKit/Harness/Journal.swift`),
+# which is exactly the domain `defaults write` edits. Writing both keys
+# here, before the app is ever installed or opened, is what turns the
+# journal on for a scenario that never passes a launch argument at all —
+# skip this and every `expect_event` in every scenario times out
+# identically, for a reason none of them would explain.
+#
+# `AgentMenuHarness` — the popover's dismissal. `StatusItemController`
+# closes the popover on `NSApplication.didResignActiveNotification` unless
+# this flag is set, and its own comment says why the flag exists: "Every
+# accessibility query runs inside `tell application "System Events"`, which
+# takes the active application away from this one — so the popover closed
+# part-way through the driver's own walk of it." That fix was written for
+# this tier and had never once run on it, because it was reached only
+# through `-AgentMenuHarness YES` and `install.sh` opens the app with a
+# bare `open`, which passes no arguments at all. `Overrides.forGUI` and
+# `StatusItemController` both read the key from `UserDefaults.standard`,
+# so `defaults write` sets it exactly as a launch argument would.
+#
+# Measured, 2026-09-21, `vanilla-first-run` against v0.2.0-beta.2: the
+# setup card's folder toggle was on screen in the step's own screenshot and
+# gone from the accessibility tree seconds later, with two stacked TCC
+# sheets in front of it — AgentMenu's Automation prompt over a second
+# privacy prompt — and the popover closed behind them. Nothing brings it
+# back, so the run's remaining clicks had nothing to click. The scenario
+# was not wrong about the identifier: `no-agent` clicked the identical one,
+# computed identically, and passed in the same batch.
+#
+# Setting the key also opens `Overrides.forGUI`'s gate, and that is inert
+# here on purpose: once open it reads the same five `AGENTMENU_*`
+# environment variables `forCLI` reads, and a Finder launch has none of
+# them, so every override resolves to nil and the app runs on its ordinary
+# paths — which its own fixture echo then states, in `config` and
+# `defaults_suite`, for anyone who wants to check rather than believe it.
+fx_activate_harness_taps() {
+    local nonce="${1:?fx_activate_harness_taps requires the run nonce.}"
     defaults write "$AGENTMENU_BUNDLE_ID" harnessJournal -string "$AGENTMENU_JOURNAL_LEAF"
     defaults write "$AGENTMENU_BUNDLE_ID" harnessNonce -string "$nonce"
+    defaults write "$AGENTMENU_BUNDLE_ID" AgentMenuHarness -bool YES
 }
 
 # fx_git_checkout <dir>

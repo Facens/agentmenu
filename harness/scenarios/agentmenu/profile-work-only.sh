@@ -18,6 +18,12 @@
 # has nothing profile-specific left to click beyond the ordinary setup flow
 # — it is the single-account control case profile-both.sh is compared
 # against.
+#
+# "Exactly one" is only true because the fixture removes the golden image's
+# own `~/.claude` when it plants a named account; the image has one because
+# it installs Claude Code. See the first-run fixture's header for the
+# measurement that found this — `profile_count` came back 2 here in the
+# v0.2.0-beta.2 gate, with `default` counted beside `work`.
 set -euo pipefail
 
 HARNESS_DIR="${HARNESS_DIR:?profile-work-only.sh must be run by harness/run.sh, which exports HARNESS_DIR.}"

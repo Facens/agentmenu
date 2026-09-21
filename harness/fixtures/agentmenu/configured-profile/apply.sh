@@ -19,7 +19,7 @@ set -euo pipefail
 
 NONCE="${1:?the configured-profile fixture requires the run nonce as its first argument.}"
 
-fx_activate_journal "$NONCE"
+fx_activate_harness_taps "$NONCE"
 
 mkdir -p "$HOME/.claude-work"
 cat > "$HOME/.claude-work/settings.json" <<'EOF'

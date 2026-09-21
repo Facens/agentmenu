@@ -8,10 +8,16 @@
    record (KTD2).
 
    Usage: osascript dialogs.applescript <verb> [args]
-     wait   <kind> <timeout-seconds> -> {"present":true,"process":...,"title":...,"buttons":[...]}
-     answer <kind> <allow or deny> [--evidence <path>] -> {"answered":"allow","process":...,"title":...,"button":...}
+     wait   <kind> <timeout-seconds> [--text <substring>] [--process <name>] -> {"present":true,"process":...,"title":...,"buttons":[...]}
+     answer <kind> <allow or deny> [--evidence <path>] [--text <substring>] [--process <name>] -> {"answered":"allow","process":...,"title":...,"button":...}
      probe                            -> {"dialogs":[...]}   every modal-looking window on screen
      kinds: gatekeeper, calendar, automation, screenrecording, alert
+
+   "--text <substring>" narrows a kind to one dialog when two of the same
+   kind can be on screen at once -- see extraTextSubstring below. It is an
+   extra requirement, never a replacement for the kind's own matching.
+   "--process <name>" names the application process to search, in place of
+   the kind's own candidates -- see extraProcessName below.
 
    "--evidence <path>" is parsed out of argv by hand — AppleScript's
    "on run argv" only ever gets a flat list, there is no flag parser, and a
@@ -89,6 +95,36 @@ property automationDenySubstrings : {"don"} -- UNPINNED
 -- sentence names, and was confirmed present for real on the dialog above.
 property automationTextSubstrings : {"wants access to control"}
 
+-- Set by "--text <substring>" on wait and answer, and empty otherwise: an
+-- EXTRA requirement on top of the kind's own identifying text, never a
+-- replacement for it.
+--
+-- A kind alone is not always enough to name one dialog. AgentMenu raises two
+-- Automation prompts on a first run -- Finder, from the warm-up at launch,
+-- and the terminal, from the first launch click -- and "wants access to
+-- control" matches both. `launch-terminal` answered whichever was on screen
+-- first, which was Finder's, and its own prompt was still waiting when the
+-- app gave up 120s later ("the terminal did not answer within 120 seconds",
+-- v0.2.0-beta.2, 2026-09-21). A scenario that means one of two prompts has
+-- to be able to say which.
+property extraTextSubstring : ""
+
+-- Set by "--process <name>" on wait and answer, and empty otherwise: the
+-- one application process whose windows are searched, in place of the
+-- kind's own candidates.
+--
+-- The "alert" kind has no candidates at all -- an app's own alert has no
+-- fixed process, wording or title -- so it falls back to "the frontmost
+-- process's front window". That fallback is wrong whenever the driver
+-- itself is what is frontmost: `bridge-install` clicks a button through
+-- System Events, AgentMenu raises an `NSAlert` with `runModal()` without
+-- becoming the frontmost application (it is an LSUIElement app), and the
+-- frontmost process was something with no windows at all -- so `wait alert`
+-- reported the alert never appeared, for 120s, with it on screen
+-- (v0.2.0-beta.2 harness, 2026-09-21). A scenario always knows which app it
+-- just clicked, so it can say so.
+property extraProcessName : ""
+
 -- macOS 26 asks separately, and repeatedly, for ScreenCaptureKit's "bypass the
 -- system private window picker" consent, even though kTCCServiceScreenCapture
 -- is already granted in the image (verified on a clone: the access row is
@@ -142,6 +178,21 @@ on windowText(win)
     end tell
 end windowText
 
+-- Removes every straight and curly quote character, so a match can name the
+-- app a TCC sentence quotes without reproducing the exact quote glyphs.
+on stripQuotes(t)
+    set saved to AppleScript's text item delimiters
+    set out to t as text
+    repeat with q in {"\"", "“", "”", "'", "‘", "’"}
+        set AppleScript's text item delimiters to (q as text)
+        set parts to text items of out
+        set AppleScript's text item delimiters to ""
+        set out to parts as text
+    end repeat
+    set AppleScript's text item delimiters to saved
+    return out
+end stripQuotes
+
 on matchesAny(theText, subs)
     set hay to my toLower(theText)
     repeat with sub in subs
@@ -151,19 +202,58 @@ on matchesAny(theText, subs)
 end matchesAny
 
 on windowMatchesKind(win, kind)
+    set haystack to my windowText(win)
+    -- The extra substring is ANDed with the kind, and is checked first so a
+    -- kind that matches everything structurally ("alert") still honours it.
+    -- Both sides have their quote characters removed before the comparison:
+    -- the sentence that names the target app spells it in curly quotes
+    -- (control “Terminal”), and a scenario should not have to carry
+    -- those through a shell, ssh and osascript to say "control terminal".
+    if extraTextSubstring is not "" then
+        if (my stripQuotes(haystack)) does not contain (my stripQuotes(my toLower(extraTextSubstring))) then return false
+    end if
     set wanted to my kindTextSubstrings(kind)
     if (count of wanted) is 0 then return true
-    set haystack to my windowText(win)
     repeat with sub in wanted
         if haystack contains (sub as text) then return true
     end repeat
     return false
 end windowMatchesKind
 
+-- Pulls "--text <substring>" out of argv and returns what is left, so the
+-- positional parsing below is unchanged whether or not it was given. Parsed
+-- by hand for the same reason "--evidence <path>" is: AppleScript's
+-- "on run argv" is a flat list and there is no flag parser.
+on takeTextFlag(argv)
+    set out to {}
+    set i to 1
+    repeat while i <= (count of argv)
+        set a to item i of argv
+        if a is "--text" then
+            if i = (count of argv) then error "--text requires a substring." number 2
+            set extraTextSubstring to item (i + 1) of argv
+            set i to i + 2
+        else if a is "--process" then
+            if i = (count of argv) then error "--process requires a process name." number 2
+            set extraProcessName to item (i + 1) of argv
+            set i to i + 2
+        else
+            set end of out to a
+            set i to i + 1
+        end if
+    end repeat
+    return out
+end takeTextFlag
+
 on run argv
     if (count of argv) < 1 then
         return my jsonError("usage", "a verb is required. Verbs: wait, answer, probe.")
     end if
+    try
+        set argv to my takeTextFlag(argv)
+    on error errText number errNum
+        return my jsonError("usage", errText)
+    end try
     set theVerb to item 1 of argv
 
     if theVerb is "probe" then
@@ -245,6 +335,7 @@ on kindSpec(kind)
 end kindSpec
 
 on candidateProcessNames(kind)
+    if extraProcessName is not "" then return {extraProcessName}
     return item 1 of my kindSpec(kind)
 end candidateProcessNames
 
@@ -262,7 +353,10 @@ on locateDialogWindow(kind)
                 end repeat
             end try
         end repeat
-        if kind is "alert" or (count of names) is 0 then
+        -- Never when a process was named: "--process" says where to look,
+        -- and wandering off to whatever is frontmost would answer a
+        -- different app's window while reporting this one's kind.
+        if extraProcessName is "" and (kind is "alert" or (count of names) is 0) then
             -- Generic fallback for "alert": the frontmost process's front
             -- window, whatever it is — matched purely by role/position,
             -- never by title, since a native alert's title is the app's own
@@ -358,25 +452,42 @@ on verbWait(kind, timeoutSeconds)
     end repeat
 end verbWait
 
+on otherChoice(choice)
+    if choice is "allow" then return "deny"
+    return "allow"
+end otherChoice
+
 on verbAnswer(kind, choice, evidencePath)
     set {proc, win} to my locateDialogWindow(kind)
     tell application "System Events"
         set procName to my nameOf(proc)
         set winTitle to my nameOf(win)
         set candidates to my buttonSubstrings(kind, choice)
+        -- The other choice's substrings, and a button that matches them is
+        -- never this choice's button however well it also matches ours.
+        -- "Don't Allow" contains "allow", and it is the FIRST button on
+        -- every TCC sheet, so a plain first-match-wins loop answers `allow`
+        -- by pressing Don't Allow -- silently, reporting matched_by
+        -- "substring" as though it had read the right word. Caught on
+        -- 2026-09-21 by `launch-terminal`, which pressed "Don't Allow" and
+        -- then failed on AgentMenu's own accurate report that macOS had not
+        -- allowed it to control the terminal.
+        set opposite to my buttonSubstrings(kind, my otherChoice(choice))
         set targetButton to missing value
         set targetButtonName to ""
         set matchedBy to "substring"
         set allButtons to buttons of win
         repeat with b in allButtons
             set bName to my nameOf(b)
-            repeat with sub in candidates
-                if (my toLower(bName)) contains (my toLower(sub as text)) then
-                    set targetButton to b
-                    set targetButtonName to bName
-                    exit repeat
-                end if
-            end repeat
+            if not (my matchesAny(bName, opposite)) then
+                repeat with sub in candidates
+                    if (my toLower(bName)) contains (my toLower(sub as text)) then
+                        set targetButton to b
+                        set targetButtonName to bName
+                        exit repeat
+                    end if
+                end repeat
+            end if
             if targetButton is not missing value then exit repeat
         end repeat
         if targetButton is missing value then

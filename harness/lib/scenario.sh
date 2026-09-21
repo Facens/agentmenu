@@ -151,6 +151,14 @@ _HARNESS_TIMEOUT_GRACE=5
 # polling loop; see that function.
 _HARNESS_PROBE_BOUND=5
 
+# How long clear_quarantine waits for the app it just signalled to actually
+# be gone, counted in 0.1s ticks. 15s: far more than a menu-bar app needs to
+# exit (measured in tens of milliseconds) and far less than the step bound,
+# so a genuine refusal to quit is reported as itself rather than as the next
+# step's timeout. Event-driven -- the loop breaks the tick the process
+# disappears -- so the number is a ceiling, never a cost.
+_HARNESS_QUIT_TICKS=150
+
 # ---------------------------------------------------------------------------
 # Quoting and guest paths.
 
@@ -372,12 +380,93 @@ _scenario_clear_screenrecording() {
 # /Applications. A translocated bundle has no stable identity for TCC, so a
 # scenario that depends on any per-app permission is testing a state no real
 # user is ever in.
+#
+# Three things happen here, in this order, and each one is waited for or
+# checked rather than assumed. The first version of this helper was a single
+# line -- `pkill; xattr -dr; nohup open &`, every failure swallowed by
+# `2>/dev/null` and a trailing `|| true` -- and it was the most consequential
+# race in the whole harness, because everything it does is a precondition for
+# the scenario that follows and none of it was observed:
+#
+#   1. `pkill` only asks. It returns the instant the signal is delivered, not
+#      when the process is gone, so `open` a few milliseconds later could
+#      reach LaunchServices while the old instance was still terminating --
+#      and LaunchServices answers "already running" by activating a process
+#      that then dies, leaving nothing at all. `smoke` in the v0.2.0-beta.2
+#      gate photographed exactly that: no status item, no dialog, no app,
+#      120s of waiting, and the very same scenario against the very same
+#      asset passed 23 minutes later.
+#   2. `xattr -dr` can fail, and its failure was discarded. The relaunch then
+#      trips Gatekeeper a second time, on a sheet no scenario answers --
+#      because `dialog wait gatekeeper` has already run, once, before this.
+#      `bridge-install` in that gate photographed that one: the second
+#      "downloaded from the Internet" sheet still up at 120s.
+#   3. `open`'s exit status was thrown away twice over, by the `&` and by the
+#      `|| true`. The one command whose success the next step depends on was
+#      the one command nobody looked at.
+#
+# So: signal, then poll until the process is actually gone (bounded, and it
+# returns the moment it is, never a fixed sleep); clear the attribute and
+# prove it is gone before relaunching, which is what makes a second
+# Gatekeeper sheet impossible rather than merely unlikely; then `open` in the
+# foreground -- safe precisely because the attribute is proven gone, so there
+# is no sheet left to block it -- and read its status. Anything that did not
+# come out right fails the scenario here, where the cause is named, instead
+# of downstream as "the status item never appeared".
 clear_quarantine() {
     local app_name="${1:?clear_quarantine requires the app name, e.g. MeetingHop.}"
     _scenario_refuse_screen "clear_quarantine"
     local app="/Applications/${app_name}.app"
-    guest_run "$HARNESS_GUEST_IP" "pkill -x $(_scenario_quote "$app_name") 2>/dev/null; xattr -dr com.apple.quarantine $(_scenario_path_arg "$app") 2>/dev/null; nohup open $(_scenario_path_arg "$app") >/dev/null 2>&1 &" >/dev/null 2>&1 || true
-    log "cleared the quarantine attribute and relaunched $app_name from /Applications (Finder does this on consent; a shell mv does not, and the app runs translocated until it happens)"
+    local quoted_name quoted_app
+    quoted_name="$(_scenario_quote "$app_name")"
+    quoted_app="$(_scenario_path_arg "$app")"
+
+    # One round trip. Written for the guest's own login shell (zsh on the
+    # stranger tier, bash locally), so: POSIX only, no arrays, no `local`.
+    # The loop is bounded by a count of 0.1s ticks and breaks on the
+    # condition, so a process that exits immediately costs one tick.
+    local script
+    script="pkill -x ${quoted_name} 2>/dev/null
+n=0
+while [ \$n -lt ${_HARNESS_QUIT_TICKS} ] && pgrep -x ${quoted_name} >/dev/null 2>&1; do
+    sleep 0.1
+    n=\$((n+1))
+done
+if pgrep -x ${quoted_name} >/dev/null 2>&1; then printf 'alive '; else printf 'gone '; fi
+xattr -dr com.apple.quarantine ${quoted_app} 2>/dev/null
+if xattr -p com.apple.quarantine ${quoted_app} >/dev/null 2>&1; then printf 'quarantined '; else printf 'clean '; fi
+open ${quoted_app} >/dev/null 2>&1
+printf '%s' \$?"
+
+    local out rc=0
+    if out="$(bounded_run "$HARNESS_STEP_TIMEOUT" guest_run "$HARNESS_GUEST_IP" "$script")"; then rc=0; else rc=$?; fi
+    if [ "$rc" -ne 0 ]; then
+        _scenario_harness_error "clear_quarantine: could not reach the guest to relaunch $app_name (exit $rc)."
+    fi
+    out="$(printf '%s' "$out" | tail -n 1 | tr -d '\r')"
+
+    local quit_state attribute_state open_rc
+    quit_state="$(printf '%s' "$out" | awk '{print $1}')"
+    attribute_state="$(printf '%s' "$out" | awk '{print $2}')"
+    open_rc="$(printf '%s' "$out" | awk '{print $3}')"
+
+    case "$quit_state" in
+        gone) ;;
+        alive) _scenario_fail "clear_quarantine: $app_name was still running $((_HARNESS_QUIT_TICKS / 10))s after pkill, so the relaunch would have raced a process that is still exiting." ;;
+        *) _scenario_harness_error "clear_quarantine: the guest answered '$out', which does not name whether $app_name quit." ;;
+    esac
+    case "$attribute_state" in
+        clean) ;;
+        quarantined) _scenario_fail "clear_quarantine: com.apple.quarantine is still on $app after xattr -dr, so the relaunch would raise a second Gatekeeper sheet that no scenario answers." ;;
+        *) _scenario_harness_error "clear_quarantine: the guest answered '$out', which does not name the quarantine attribute's state." ;;
+    esac
+    case "$open_rc" in
+        0) ;;
+        ''|*[!0-9]*) _scenario_harness_error "clear_quarantine: the guest answered '$out', which does not name open's exit status." ;;
+        *) _scenario_fail "clear_quarantine: \`open $app\` failed with exit $open_rc, so nothing was relaunched from /Applications." ;;
+    esac
+
+    log "cleared the quarantine attribute and relaunched $app_name from /Applications: $app_name quit, the attribute is gone, open returned 0 (Finder does all three on consent; a shell mv does not, and the app runs translocated until it happens)"
     return 0
 }
 
@@ -436,6 +525,45 @@ shot() {
 # statusclick verb) to reopen a popover a foreground-stealing step in
 # between may have closed, before the real click; a failure reopening is
 # reported the same way a failure on the click itself would be.
+# Waits, bounded, for an AXIdentifier to exist before anything clicks it.
+#
+# `ax.applescript`'s locate() is one snapshot of the accessibility tree, and
+# a SwiftUI view is in that tree some time after it is on screen, not at the
+# same instant. `vanilla-first-run` in the v0.2.0-beta.2 gate failed on
+# `setup.folder.c6c8b54fe3ce.toggle` two seconds after `detecting finished`
+# named that very folder and with the screenshot of the step showing the
+# checkbox drawn -- while `no-agent`, which clicks the identical identifier
+# computed the identical way, passed in the same batch. Nothing about the
+# app or the identifier was wrong; the lookup was simply early, and had no
+# second chance because click() asked once.
+#
+# `find` is the right verb to poll on: it answers `{"found":false}` rather
+# than raising, so absence is a value here and only a driver failure is an
+# error. Bounded by the step timeout, like every other wait in this file,
+# and it returns the poll the element appears -- so the normal case pays one
+# probe and a genuine absence still fails, loudly, with a screenshot.
+_scenario_await_element() {
+    local bundle="$1" identifier="$2"
+    local deadline=$(( $(date +%s) + HARNESS_STEP_TIMEOUT ))
+    local json found
+    while :; do
+        if json="$(_scenario_osascript "$_HARNESS_PROBE_BOUND" ax.applescript find "$bundle" "$identifier" 2>/dev/null)"; then
+            _scenario_check_kind "looking for $identifier under $bundle" "$json"
+            found="$(printf '%s' "$json" | jq -r '.found // false' 2>/dev/null || echo false)"
+            if [ "$found" = "true" ]; then
+                return 0
+            fi
+        fi
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            # Command substitution on purpose -- see this file's header,
+            # fact 2.
+            : "$(shot "element-timeout" 2>/dev/null)" || true
+            _scenario_fail "no element with AXIdentifier $identifier appeared under $bundle within ${HARNESS_STEP_TIMEOUT}s."
+        fi
+        sleep 0.5
+    done
+}
+
 click() {
     local bundle="${1:?click requires a bundle id.}" identifier="${2:?click requires an identifier.}" opt="${3:-}"
     _scenario_refuse_screen "click"
@@ -444,6 +572,9 @@ click() {
         reopen_json="$(_ax statusclick "$bundle")" || _scenario_harness_error "click: could not reach the guest to reopen $bundle's popover."
         _scenario_check_kind "reopening $bundle's popover before clicking $identifier" "$reopen_json"
     fi
+    # After the reopen, never before it: the popover the element lives in
+    # may not exist until that click has landed.
+    _scenario_await_element "$bundle" "$identifier"
     local json
     json="$(_ax click "$bundle" "$identifier")" || _scenario_harness_error "click: could not reach the guest to click $identifier on $bundle."
     _scenario_check_kind "clicking $identifier on $bundle" "$json"
@@ -543,17 +674,33 @@ ax_window_count() {
 # dialogs.applescript's own header documents for its (guest-side) --evidence
 # flag, which this never passes — the JSON already back from `answer` carries
 # the same fields, so there is nothing to copy out of the guest for this one.
+# dialog wait   <kind> [timeout] [--text <substring>]
+# dialog answer <kind> <allow|deny> [--text <substring>]
+# dialog probe
+#
+# Anything after the positional arguments is passed through to
+# dialogs.applescript untouched, which today means `--text <substring>`: an
+# extra requirement on the dialog's own text, for a kind that can have two
+# dialogs on screen at once. See that file's `extraTextSubstring`.
 dialog() {
     local action="${1:?dialog requires wait, answer or probe.}"
     _scenario_refuse_screen "dialog"
     case "$action" in
         wait)
-            local kind="${2:?dialog wait requires a kind.}" timeout="${3:-$HARNESS_STEP_TIMEOUT}"
+            local kind="${2:?dialog wait requires a kind.}" timeout
+            shift 2
+            # The timeout is optional and so is everything after it, so it is
+            # recognised by shape: a bare number. Anything else -- a `--text`
+            # flag, or nothing at all -- leaves the step bound in place.
+            case "${1:-}" in
+                ''|*[!0-9]*) timeout="$HARNESS_STEP_TIMEOUT" ;;
+                *) timeout="$1"; shift ;;
+            esac
             if [ "$timeout" -gt "$HARNESS_STEP_TIMEOUT" ] 2>/dev/null; then
                 timeout="$HARNESS_STEP_TIMEOUT"
             fi
             local json
-            json="$(_scenario_osascript "$((timeout + _HARNESS_TIMEOUT_GRACE))" dialogs.applescript wait "$kind" "$timeout")" \
+            json="$(_scenario_osascript "$((timeout + _HARNESS_TIMEOUT_GRACE))" dialogs.applescript wait "$kind" "$timeout" "$@")" \
                 || _scenario_harness_error "dialog: could not reach the guest to wait for the $kind dialog."
             _scenario_check_kind "waiting for the $kind dialog" "$json"
             printf '%s\n' "$json"
@@ -564,8 +711,9 @@ dialog() {
                 allow|deny) ;;
                 *) _scenario_harness_error "dialog: answer's choice must be allow or deny, got '$choice'." ;;
             esac
+            shift 3
             local json
-            json="$(_dialogs answer "$kind" "$choice")" || _scenario_harness_error "dialog: could not reach the guest to answer the $kind dialog."
+            json="$(_dialogs answer "$kind" "$choice" "$@")" || _scenario_harness_error "dialog: could not reach the guest to answer the $kind dialog."
             _scenario_check_kind "answering the $kind dialog with $choice" "$json"
             _scenario_record_evidence "$json"
             # The authoritative record of what was actually pressed. A scenario
@@ -712,16 +860,33 @@ _scenario_wait_for_event() {
         rc=$?
     fi
 
-    if [ "$HARNESS_GUEST_TRANSPORT" != "local" ]; then
-        guest_copy_out "$HARNESS_GUEST_IP" "$HARNESS_GUEST_JOURNAL" "$HARNESS_JOURNAL" 2>/dev/null || true
-    elif [ "$HARNESS_GUEST_JOURNAL" != "$HARNESS_JOURNAL" ]; then
-        cp "$HARNESS_GUEST_JOURNAL" "$HARNESS_JOURNAL" 2>/dev/null || true
-    fi
+    journal_fetch
 
     if [ "$rc" -eq 0 ]; then
         printf '%s\n' "$out"
     fi
     return "$rc"
+}
+
+# Copies the app's journal off the guest to $HARNESS_JOURNAL, where the run
+# directory keeps it and the gate reads it. Best effort by design: a journal
+# that cannot be fetched must not change a scenario's verdict (R13).
+#
+# Every `expect_event` calls this, which is why most scenarios never have to.
+# A scenario that asserts nothing from the journal does: `smoke` turns the
+# hook on, proves the status item by accessibility alone, and used to leave
+# the guest with the only copy — so `report.sh` had no first line to read the
+# nonce from and scored the whole gate `error` however the scenarios went.
+# Naming the copy is better than a scenario acquiring one as a side effect of
+# an assertion it does not want to make.
+journal_fetch() {
+    [ -n "${HARNESS_GUEST_JOURNAL:-}" ] || return 0
+    if [ "$HARNESS_GUEST_TRANSPORT" != "local" ]; then
+        guest_copy_out "$HARNESS_GUEST_IP" "$HARNESS_GUEST_JOURNAL" "$HARNESS_JOURNAL" 2>/dev/null || true
+    elif [ "$HARNESS_GUEST_JOURNAL" != "$HARNESS_JOURNAL" ]; then
+        cp "$HARNESS_GUEST_JOURNAL" "$HARNESS_JOURNAL" 2>/dev/null || true
+    fi
+    return 0
 }
 
 expect_event() {

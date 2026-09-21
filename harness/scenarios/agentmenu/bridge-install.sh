@@ -65,12 +65,30 @@ step "install bridge"
 click "$BUNDLE_ID" "settings.accounts.installBridge"
 
 step "confirmation alert"
-ALERT_WAIT="$(dialog wait alert)"
+# Named twice over, by process and by text. The `alert` kind makes no
+# assumption about process, wording or title -- an app's own alert has
+# none that this driver could know -- so it falls back to the frontmost
+# process's front window, and that is the wrong window here in two
+# different ways: AgentMenu raises this one with `NSAlert.runModal()`
+# without becoming the frontmost application (it is LSUIElement, and the
+# click that raised it came through System Events), and AgentMenu's own
+# front window is the Settings window the button lives in. Unnamed, the
+# wait reported "never appeared" for 120s with the alert on screen
+# (v0.2.0-beta.2 harness, 2026-09-21).
+#
+# The text is the alert's own first line (`ProfilesPane.installBridge`),
+# and matching on it is what keeps this off the Settings window. R17
+# forbids asserting on copy; this is not an assertion, it is an address —
+# the scenario still proves the install happened by reading `bridge
+# installed` out of the app's journal below.
+ALERT_PROCESS='AgentMenu'
+ALERT_MATCH='status-line bridge'
+ALERT_WAIT="$(dialog wait alert --process "$ALERT_PROCESS" --text "$ALERT_MATCH")"
 if [ "$(printf '%s' "$ALERT_WAIT" | jq -r '.present')" != "true" ]; then
     verdict fail "the status-line bridge's confirmation alert never appeared."
 fi
 shot "bridge-alert" > /dev/null
-dialog answer alert allow > /dev/null
+dialog answer alert allow --process "$ALERT_PROCESS" --text "$ALERT_MATCH" > /dev/null
 log "the install confirmation alert was answered Install"
 
 step "bridge installed"

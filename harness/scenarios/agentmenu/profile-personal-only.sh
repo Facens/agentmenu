@@ -14,6 +14,10 @@
 # replaced name. Same single-account expectation as profile-work-only.sh:
 # with one profile, `PopoverModel.showsProfileSwitch` stays false (R16) and
 # there is nothing profile-specific to click.
+#
+# "One profile" depends on the fixture removing the golden image's own
+# `~/.claude`, which its header explains and the v0.2.0-beta.2 gate
+# measured.
 set -euo pipefail
 
 HARNESS_DIR="${HARNESS_DIR:?profile-personal-only.sh must be run by harness/run.sh, which exports HARNESS_DIR.}"

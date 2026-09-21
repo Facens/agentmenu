@@ -38,7 +38,7 @@ set -euo pipefail
 
 NONCE="${1:?the configured-terminal fixture requires the run nonce as its first argument.}"
 
-fx_activate_journal "$NONCE"
+fx_activate_harness_taps "$NONCE"
 fx_git_checkout "$HOME/$AGENTMENU_CHECKOUT_LEAF"
 
 mkdir -p "$HOME/.claude-work"

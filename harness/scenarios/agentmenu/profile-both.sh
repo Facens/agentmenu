@@ -21,6 +21,12 @@
 # displayed names (R17 forbids that), only that "work" and "personal" are
 # each their own clickable control rather than one collapsed into the
 # other.
+#
+# "Two accounts" is two and not three because the fixture removes the
+# golden image's own `~/.claude` when it plants the first named one; its
+# header records the measurement. It also decides which account seeds the
+# global default: with `.claude` standing, `default` sorted first and
+# "personal" never did.
 set -euo pipefail
 
 HARNESS_DIR="${HARNESS_DIR:?profile-both.sh must be run by harness/run.sh, which exports HARNESS_DIR.}"
