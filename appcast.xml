@@ -1,0 +1,17 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>AgentMenu</title>
+        <item>
+            <title>0.2.0-beta.3</title>
+            <pubDate>Mon, 21 Sep 2026 15:49:37 +0000</pubDate>
+            <link>https://github.com/Facens/agentmenu</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>0.2.0.3</sparkle:version>
+            <sparkle:shortVersionString>0.2.0-beta.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/Facens/agentmenu/releases/download/v0.2.0-beta.3/AgentMenu-0.2.0-beta.3.zip" length="2239460" type="application/octet-stream" sparkle:edSignature="hyJ/K+CaWdq2ArINO9sYgl0/j6lIwxUTkNmOmlK5DhZp9E7kTSd5pmM2io4ihSUdQ0q5C2doWoahZXdzb2zBCw=="/>
+        </item>
+    </channel>
+</rss>
