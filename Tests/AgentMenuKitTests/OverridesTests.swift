@@ -486,9 +486,10 @@ private func runDumpStateCLITests(_ t: TestRunner) {
             return
         }
         // Against the real bundled Resources/terminals/*.toml (no overlay,
-        // no config overrides): terminal-app ships enabled=false,
-        // unverified=true, origin .bundled — disabled, not unconfirmed,
-        // since the trust gate only applies to user-origin manifests. This
+        // no config overrides): terminal-app ships enabled=true and verified
+        // as of 2026-09-21, origin .bundled — so it is available, not
+        // unconfirmed, since the trust gate only applies to user-origin
+        // manifests and Terminal.app is on every Mac. This
         // depends on `ResourceRoot.bundled()` actually resolving
         // Resources/ from wherever the CLI binary was built — the same
         // condition `ResolveCommandTests.swift`'s "launch-parity" cases
@@ -500,8 +501,7 @@ private func runDumpStateCLITests(_ t: TestRunner) {
             return
         }
         let terminalApp = terminals.first { $0["id"] as? String == "terminal-app" }
-        t.expectEqual(terminalApp?["availability"] as? String, "missing", "a disabled bundled terminal is bucketed as missing")
-        t.expectEqual(terminalApp?["detail"] as? String, "disabled_by_manifest", "…and the detail says specifically why, not just that it is unavailable")
+        t.expectEqual(terminalApp?["availability"] as? String, "available", "the bundled Terminal.app manifest is enabled, and Terminal.app is on every Mac")
     })()
 
     ({

@@ -40,6 +40,9 @@ NONCE="${1:?the configured-terminal fixture requires the run nonce as its first 
 
 fx_activate_harness_taps "$NONCE"
 fx_git_checkout "$HOME/$AGENTMENU_CHECKOUT_LEAF"
+# The folder this scenario actually launches in — see _lib.sh for why its
+# name is shaped the way it is.
+fx_git_checkout "$HOME/$AGENTMENU_HARD_PATH_LEAF"
 
 mkdir -p "$HOME/.claude-work"
 cat > "$HOME/.claude-work/settings.json" <<'EOF'
@@ -94,7 +97,7 @@ config_dir = "~/.claude-work"
 [[folders]]
 id = "harness-checkout"
 label = "Harness Project"
-path = "~/$AGENTMENU_CHECKOUT_LEAF"
+path = "~/$AGENTMENU_HARD_PATH_LEAF"
 
 [binaries]
 claude = "$HOME/.local/bin/claude"

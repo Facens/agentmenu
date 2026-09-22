@@ -1,14 +1,28 @@
-# Terminal.app — present, disabled, unverified. Nobody has run this script by
-# hand yet (docs/adding-a-terminal.md step 2), so it is not claimed to behave
-# any particular way beyond what `do script` documents: it runs the command in
-# a new window, or in the front window's active tab if one is already open.
+# Terminal.app — enabled and verified, and the reason it is enabled is that a
+# vanilla Mac has nothing else. iTerm2 is still preferred where it exists: the
+# registry loads terminals in filename order, so `iterm2` is offered the
+# default before `terminal-app` ever is (AppEnvironment.seedIfMissing).
+# Without this one enabled, a first run on a stock machine ends with a
+# configured folder and no terminal to launch it in — which is what the
+# first-run harness reported, every run, as `no-usable-terminal`.
+#
+# Verified 2026-09-21 the way docs/adding-a-terminal.md step 2 asks: a real
+# session launched through it on a clean macOS 26.6.2 guest, in a folder whose
+# name carries both a space and an apostrophe (`~/dev/it's a project`) — the
+# case that breaks naive quoting. `launch result {"ok":true}`, and Claude Code
+# came up in that directory. The harness exercises that same path on every
+# run (harness/scenarios/agentmenu/launch-terminal.sh).
+#
+# Behaviour is what `do script` documents and nothing more: the command runs
+# in a new window, or in the front window's active tab if one is already
+# open.
 schema = 1
 id = "terminal-app"
 display_name = "Terminal"
 kind = "applescript"
 bundle_id = "com.apple.Terminal"
-enabled = false
-unverified = true
+enabled = true
+unverified = false
 applescript = """
 on run argv
   set cmd to item 1 of argv

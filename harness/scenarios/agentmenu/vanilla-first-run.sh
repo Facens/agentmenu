@@ -16,7 +16,13 @@
 # fact about the product, not a bug this harness fixes (R21), so it is
 # recorded as a finding rather than worked around.
 #
-# Edge case (AE2): this run carries exactly one finding.
+# Edge case (AE2): this run used to carry exactly one finding,
+# `no-usable-terminal` — a vanilla Mac reaching a launchable state with a
+# folder and no terminal to launch it in. That stopped being true on
+# 2026-09-21, when `Resources/terminals/terminal-app.toml` was enabled and
+# marked verified, so the finding is gone rather than merely unrecorded: a
+# scenario that reports a fact the app no longer produces is worse than one
+# that reports nothing.
 set -euo pipefail
 
 HARNESS_DIR="${HARNESS_DIR:?vanilla-first-run.sh must be run by harness/run.sh, which exports HARNESS_DIR.}"
@@ -69,7 +75,5 @@ step "finish setup"
 click "$BUNDLE_ID" "setup.done"
 expect_event "setup finished" has_project_folder=true folder_count=2 > /dev/null
 shot "launcher" > /dev/null
-
-finding "no-usable-terminal"
 
 verdict pass

@@ -34,6 +34,18 @@ AGENTMENU_JOURNAL_LEAF="run.ndjson"
 # `~/dev` and `AccessibilityID.pathHash` then hashes.
 AGENTMENU_CHECKOUT_LEAF="dev/harness-project"
 
+# A second checkout whose name carries the two characters that break naive
+# quoting: a space and an apostrophe. `docs/adding-a-terminal.md` step 2 asks
+# for exactly this before a terminal manifest may claim `unverified = false`
+# — "with a folder whose name contains a space and an apostrophe. That is the
+# case that breaks naive quoting." The app single-quotes the directory into a
+# shell command it hands the terminal (`CommandBuilder.singleQuoted`, which
+# escapes an apostrophe as '\''), so this is the path that proves the
+# escaping end to end rather than in a unit test.
+#
+# Synthetic, like every other path here: no maintainer username, no real home.
+AGENTMENU_HARD_PATH_LEAF="dev/it's a project"
+
 # fx_activate_harness_taps <nonce>
 #
 # Turns on both of the app's read-only harness taps, in the one domain a

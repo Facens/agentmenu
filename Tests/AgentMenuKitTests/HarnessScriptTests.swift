@@ -149,7 +149,7 @@ private func runHarnessHappyPathTests(_ t: TestRunner, _ root: URL) {
     t.expect((report["nonce"] as? String ?? "").count >= 16, "the run carries a nonce for the journal to echo")
     t.expectEqual((report["asset_sha256"] as? String)?.count, 64, "the asset is hashed into the report")
     t.expectEqual((report["steps"] as? [Any])?.count, 2, "both of the scenario's steps reached steps[]")
-    t.expectEqual(report["findings"] as? [String] ?? [], ["no-usable-terminal"], "a passing run still carries its finding")
+    t.expectEqual(report["findings"] as? [String] ?? [], ["dialog-confirm-retry-2"], "a passing run still carries its finding")
     t.expectEqual(report["image"] as? [String: Any] != nil, true, "the golden image's build inputs are recorded")
 
     // Evidence the supervisor really drove the VM path, and gave the clone back.
@@ -1287,7 +1287,7 @@ printf '{"step":"install","status":"ok","screenshot":"%s/001-install.png","at":"
     "$HARNESS_SHOT_DIR" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$HARNESS_STEPS"
 printf '{"step":"setup card","status":"ok","screenshot":"%s/002-setup.png","at":"%s"}\n' \
     "$HARNESS_SHOT_DIR" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$HARNESS_STEPS"
-echo "no-usable-terminal" >> "$HARNESS_FINDINGS"
+echo "dialog-confirm-retry-2" >> "$HARNESS_FINDINGS"
 exit 0
 """#
 

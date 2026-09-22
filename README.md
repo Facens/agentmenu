@@ -85,8 +85,9 @@ Settings toggle will opt a copy into betas instead.
 |---|---|
 | **Claude Code** | Verified end to end (against 2.1.266). The default. |
 | Codex, OpenCode | Manifests are present, disabled and marked unverified: the flags were not executed, so the app will not pretend otherwise. Enable one in Settings once you have checked it. |
-| **iTerm2** | Verified. The default terminal. |
-| Ghostty, Terminal.app | Present, disabled, unverified — same rule. |
+| **iTerm2** | Verified. Preferred when it is installed. |
+| **Terminal.app** | Verified. The fallback every Mac has, so a first run always has somewhere to launch. |
+| Ghostty | Manifest is present, disabled and marked unverified — same rule as the agents above. |
 
 Every one of these is a small TOML file under `Resources/`, and a file with the
 same `id` in `~/.config/agentmenu/agents/` or `~/.config/agentmenu/terminals/`

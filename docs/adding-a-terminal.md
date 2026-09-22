@@ -87,7 +87,7 @@ end run
 A new tab in the existing window, a new window when the app has none — the
 behaviour of the SwiftBar plugin this app replaces.
 
-## Terminal.app, present but unverified
+## Terminal.app, enabled and verified
 
 ```toml
 schema = 1
@@ -95,8 +95,8 @@ id = "terminal-app"
 display_name = "Terminal"
 kind = "applescript"
 bundle_id = "com.apple.Terminal"
-enabled = false
-unverified = true
+enabled = true
+unverified = false
 applescript = """
 on run argv
   set cmd to item 1 of argv
@@ -112,11 +112,18 @@ end run
 """
 ```
 
-Nobody has run this one by hand yet (see step 2 below), so it claims nothing
-beyond what `do script` itself documents: a new window when Terminal has
-none, or the front window's active tab when one is already open. Verifying it
-— and, if it does not already do what you want, changing it to open a new tab
-instead — is exactly the kind of manifest-only fix a user overlay is for.
+This one is enabled, and it is the only terminal that is enabled without
+being installed-and-chosen first, because Terminal.app is the one a stock Mac
+always has: without it, a first run ends with a configured folder and nothing
+to launch it in. iTerm2 still wins where it exists — terminals load in
+filename order, so `iterm2` is offered the default first.
+
+Verified 2026-09-21 the way step 2 below asks, in a folder named
+`~/dev/it's a project` — a space and an apostrophe, the case that breaks
+naive quoting. It claims nothing beyond what `do script` documents: a new
+window when Terminal has none, or the front window's active tab when one is
+already open. If that is not what you want — a new tab every time, say —
+changing it is exactly the kind of manifest-only fix a user overlay is for.
 
 ## An argv example
 
@@ -147,5 +154,5 @@ unverified = true
 | id | kind | state |
 |---|---|---|
 | `iterm2` | applescript | verified — the plugin this app replaces proves it |
-| `terminal-app` | applescript | present, disabled, unverified |
+| `terminal-app` | applescript | enabled, verified 2026-09-21 |
 | `ghostty` | argv | present, disabled, unverified |

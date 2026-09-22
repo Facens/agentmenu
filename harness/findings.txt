@@ -21,7 +21,17 @@
 # longer lists it — that refusal is deliberate, not a bug to work around.
 
 # AgentMenu — harness/scenarios/agentmenu/
-no-usable-terminal: the vanilla first run reaches its launchable state with a configured folder but no enabled terminal (R21 — the shipped default, not a bug this harness fixes).
+# RETIRED 2026-09-21. `no-usable-terminal` said: "the vanilla first run
+# reaches its launchable state with a configured folder but no enabled
+# terminal (R21 — the shipped default, not a bug this harness fixes)." It was
+# true for every run until the harness proved the Terminal.app manifest works
+# — a real session, on a clean guest, in a folder named `~/dev/it's a
+# project` — and `Resources/terminals/terminal-app.toml` was enabled and
+# marked verified on the strength of it. R21 says report rather than fix; the
+# reporting is what made the fix safe to make. The code is left here, unlisted
+# and uncalled, so that the next person to grep for it finds why it went
+# rather than nothing. Re-register it if a scenario ever needs it again — an
+# unregistered code a scenario calls is a harness error, by design.
 no-usable-agent: the golden image's stand-in Claude Code binary was removed before first run, so setup found no usable agent to launch.
 
 # MeetingHop — meetinghop:harness/scenarios/meetinghop/

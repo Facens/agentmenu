@@ -53,6 +53,26 @@ step "launch"
 wait_for_status_item "$BUNDLE_ID" > /dev/null
 journal_at "$BUNDLE_ID" "$AGENTMENU_JOURNAL_LEAF"
 
+step "finder automation prompt"
+# Cleared for the evidence, not for the verdict. This scenario proves the
+# install by reading `bridge installed` out of the journal, so the sheet
+# cannot change the result — but `docs/releasing.md`'s checklist asks a human
+# to open this run's screenshots before the release is published, and in the
+# v0.2.0-beta.3 gate `004-bridge-report.png` showed AgentMenu's Finder
+# Automation prompt sitting over the bridge report it was taken to show.
+# Evidence nobody can read is not evidence.
+#
+# Bounded and optional, the same shape launch-terminal uses: a machine that
+# has already granted Finder control raises nothing here.
+FINDER_MATCH='control finder'
+FINDER_WAIT="$(dialog wait automation 30 --text "$FINDER_MATCH")"
+if [ "$(printf '%s' "$FINDER_WAIT" | jq -r '.present')" = "true" ]; then
+    dialog answer automation allow --text "$FINDER_MATCH" > /dev/null
+    log "answered the Automation prompt for Finder, so it is not sitting over this run's screenshots"
+else
+    log "no Automation prompt for Finder appeared (already granted)"
+fi
+
 step "open settings"
 open_status_item "$BUNDLE_ID"
 click "$BUNDLE_ID" "popover.gear"

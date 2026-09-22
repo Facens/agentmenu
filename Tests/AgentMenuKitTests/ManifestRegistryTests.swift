@@ -660,7 +660,11 @@ func runManifestRegistryTests(_ t: TestRunner) {
                 t.expect(false, "\(id) did not load from Resources/agents")
             }
         }
-        for id in ["terminal-app", "ghostty"] {
+        // Terminal.app left this list on 2026-09-21: it ships enabled and
+        // verified now, because it is the only terminal a stock Mac is
+        // guaranteed to have and a first run without one has nowhere to
+        // launch. Its own assertions are below.
+        for id in ["ghostty"] {
             if let manifest = registry.terminal(id: id) {
                 t.expect(manifest.unverified, "\(id) ships marked unverified")
                 t.expectEqual(
@@ -671,6 +675,18 @@ func runManifestRegistryTests(_ t: TestRunner) {
             } else {
                 t.expect(false, "\(id) did not load from Resources/terminals")
             }
+        }
+
+        // The one terminal that ships ready to use.
+        if let terminalApp = registry.terminal(id: "terminal-app") {
+            t.expect(!terminalApp.unverified, "terminal-app ships verified — a real session was launched through it on a clean guest, in a folder whose name carries a space and an apostrophe")
+            t.expectEqual(
+                registry.availability(of: terminalApp, config: Config(), binaryPath: nil),
+                .available,
+                "terminal-app ships enabled, and an applescript terminal is probed by bundle id, so a stock Mac always has it"
+            )
+        } else {
+            t.expect(false, "terminal-app did not load from Resources/terminals")
         }
 
         if let claudeCode = registry.agent(id: "claude-code") {

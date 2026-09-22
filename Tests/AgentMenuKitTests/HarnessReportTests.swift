@@ -148,7 +148,7 @@ private func runReportCompileTests(_ t: TestRunner, _ root: URL, _ reportSH: Str
         let run = writeReportFixtureRun(
             dir, name: "run-vanilla", scenario: "vanilla-first-run",
             reportNonce: "n2", journalNonce: "n2",
-            verdict: "pass", outcome: "pass", findings: ["no-usable-terminal"]
+            verdict: "pass", outcome: "pass", findings: ["dialog-confirm-retry-2"]
         )
         let result = reportRun(reportSH, ["compile", "--run-dir", run])
         t.expectEqual(result.status, 0, "vanilla-first-run compiles to exit 0 — \(result.stderr)")
@@ -157,7 +157,7 @@ private func runReportCompileTests(_ t: TestRunner, _ root: URL, _ reportSH: Str
             return
         }
         t.expectEqual(obj["verdict"] as? String, "pass", "verdict is pass")
-        t.expectEqual(obj["findings"] as? [String], ["no-usable-terminal"], "exactly one finding, no-usable-terminal")
+        t.expectEqual(obj["findings"] as? [String], ["dialog-confirm-retry-2"], "exactly one finding, dialog-confirm-retry-2")
     }
 
     // Edge: a journal missing the end-state event — here, the run's own
@@ -234,7 +234,7 @@ private func runReportFoldTests(_ t: TestRunner, _ root: URL, _ reportSH: String
         defer { dir.cleanup() }
         let run1 = writeReportFixtureRun(
             dir, name: "r1", scenario: "vanilla-first-run", reportNonce: "N", journalNonce: "N",
-            verdict: "pass", outcome: "pass", findings: ["no-usable-terminal"]
+            verdict: "pass", outcome: "pass", findings: ["dialog-confirm-retry-2"]
         )
         let run2 = writeReportFixtureRun(
             dir, name: "r2", scenario: "no-agent", reportNonce: "N", journalNonce: "N",
@@ -255,7 +255,7 @@ private func runReportFoldTests(_ t: TestRunner, _ root: URL, _ reportSH: String
         t.expectEqual(obj["verdict"] as? String, "pass", "overall verdict is pass")
         t.expectEqual(obj["complete"] as? Bool, true, "overall complete")
         let findings = (obj["findings"] as? [String])?.sorted() ?? []
-        t.expectEqual(findings, ["no-usable-agent", "no-usable-terminal"], "findings is the sorted union")
+        t.expectEqual(findings, ["dialog-confirm-retry-2", "no-usable-agent"], "findings is the sorted union")
         let names = ((obj["scenarios"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }.sorted()
         t.expectEqual(names, ["no-agent", "vanilla-first-run"], "both scenarios are named")
     }
@@ -340,7 +340,7 @@ private func runReportPublicTests(_ t: TestRunner, _ root: URL, _ reportSH: Stri
         defer { dir.cleanup() }
         let run = writeReportFixtureRun(
             dir, name: "r1", scenario: "vanilla-first-run", reportNonce: "N", journalNonce: "N",
-            verdict: "pass", outcome: "pass", findings: ["no-usable-terminal"],
+            verdict: "pass", outcome: "pass", findings: ["dialog-confirm-retry-2"],
             image: [
                 "schema_version": 1, "image_name": "first-run-golden", "build_id": "20260918-1",
                 "macos_product_version": "15.6", "macos_build": "25G123", "ipsw_sha256": "abcd",
@@ -370,7 +370,7 @@ private func runReportPublicTests(_ t: TestRunner, _ root: URL, _ reportSH: Stri
         t.expect(!keys.contains("nonce"), "the nonce never reaches the public report")
 
         let findings = obj["findings"] as? [String] ?? []
-        t.expectEqual(findings, ["no-usable-terminal"], "the finding code, and only the code")
+        t.expectEqual(findings, ["dialog-confirm-retry-2"], "the finding code, and only the code")
         for code in findings {
             t.expect(FileManager.default.contents(atPath: findingsTXT).flatMap { String(data: $0, encoding: .utf8) }?.contains(code) == true, "'\(code)' is present in findings.txt")
         }
@@ -449,7 +449,7 @@ private func runReportDecideTests(_ t: TestRunner, _ root: URL, _ reportSH: Stri
         defer { dir.cleanup() }
         let run = writeReportFixtureRun(
             dir, name: "r1", scenario: "vanilla-first-run", reportNonce: "N", journalNonce: "N",
-            verdict: "pass", outcome: "pass", findings: ["no-usable-terminal"]
+            verdict: "pass", outcome: "pass", findings: ["dialog-confirm-retry-2"]
         )
         let folded = dir.path("gate/report.json")
         t.expectEqual(reportRun(reportSH, ["fold", "--out", folded, "--run-dir", run]).status, 0, "the fixture folds to a pass")
