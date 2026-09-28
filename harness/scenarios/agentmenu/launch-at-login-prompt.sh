@@ -75,7 +75,15 @@ if [ "$(printf '%s' "$ALERT_WAIT" | jq -r '.present')" != "true" ]; then
     verdict fail "the launch-at-login prompt never appeared for an existing install that had not been asked."
 fi
 shot "login-item-prompt" > /dev/null
-dialog answer alert allow --process "$ALERT_PROCESS" --text "$ALERT_MATCH" > /dev/null
+# By identifier, never `dialog answer alert allow`. That helper matches the
+# alert kind by no button name, so it falls back to position and presses
+# the LAST button. The bridge-install alert lays Install and Cancel out side
+# by side, where the last button is Install; this one stacks its two longer
+# titles vertically, where the last button is Not Now. The first gate run
+# (v0.2.2-beta.1) pressed exactly that and recorded enabled=false. The
+# buttons carry AXIdentifiers, and an NSAlert is a window of the app's own
+# process, so click reaches them the way it reaches every other control.
+click "$BUNDLE_ID" "launchAtLoginPrompt.accept"
 log "the launch-at-login prompt was answered Launch at Login"
 
 step "asked and registered"

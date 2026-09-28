@@ -50,6 +50,18 @@ enum LaunchAtLoginPrompt {
         // Settings cannot also do later. The journal tap that records this
         // question's answer re-reads `LaunchAtLogin.isEnabled` afterwards
         // rather than trusting the click, for the same reason.
+        // An NSAlert takes its icon from `NSApp.applicationIconImage`, which
+        // this early in an accessory app's launch can still be empty: the
+        // v0.2.2-beta.1 gate run showed the dashed placeholder instead of
+        // the app icon. Asking the workspace for the bundle's own icon does
+        // not depend on that timing.
+        alert.icon = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
+        // A menu-bar app is not active at launch, and an alert from an
+        // inactive app draws its default button grey, the same as the other
+        // one. Activating first is what makes "Launch at Login" read as the
+        // default it is.
+        NSApp.activate(ignoringOtherApps: true)
+
         if alert.runModal() == .alertFirstButtonReturn {
             LaunchAtLogin.set(true)
         }

@@ -182,10 +182,11 @@ private func hfix_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenar
     // Every literal (non-interpolated) identifier the eight scenarios
     // click, plus the two computed shapes (`setup.folder.<hash>.toggle`,
     // `popover.row.<hash>.launch`) matched by prefix/suffix instead.
-    // `launch-at-login-prompt.sh` clicks nothing at all — it answers a
-    // native alert through `dialog`, not `click` — so it contributes no
-    // entries here, and `setup.launchAtLogin` is vanilla-first-run.sh's own
-    // addition (`AccessibilityID.Setup.launchAtLogin`).
+    // `launchAtLoginPrompt.accept` is launch-at-login-prompt.sh's: it
+    // clicks the alert's button by identifier, because `dialog answer alert`
+    // presses by position and the stacked layout puts Not Now last. And
+    // `setup.launchAtLogin` is vanilla-first-run.sh's own addition
+    // (`AccessibilityID.Setup.launchAtLogin`).
     let knownLiterals: Set<String> = [
         "setup.done",
         "setup.launchAtLogin",
@@ -194,6 +195,7 @@ private func hfix_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenar
         "settings.accounts.installBridge",
         "popover.profile.work",
         "popover.profile.personal",
+        "launchAtLoginPrompt.accept",
     ]
 
     for scenario in hfix_scenarioNames {
