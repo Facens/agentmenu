@@ -53,6 +53,7 @@ final class HarnessJournal: @unchecked Sendable {
     @MainActor private var wasDetecting = false
     @MainActor private var wasSetupNeeded: Bool?
     @MainActor private var wasFirstRunCompleted: Bool?
+    @MainActor private var wasLaunchAtLoginAsked: Bool?
 
     private init() {}
 
@@ -151,6 +152,23 @@ final class HarnessJournal: @unchecked Sendable {
 
     @MainActor
     private func observe(_ environment: AppEnvironment) {
+        // Set synchronously, before the `$config` subscription below is even
+        // made — not left for that subscription's own replay of the current
+        // value, which this tap defers a full run-loop turn with
+        // `DispatchQueue.main.async` (see the comment on that subscription).
+        // `LaunchAtLoginPrompt.presentIfNeeded`, called later in the same
+        // `applicationDidFinishLaunching`, blocks the main thread inside
+        // `NSAlert.runModal()`'s own nested run loop — whether a block
+        // already queued on the main queue before that call runs during
+        // that nested loop or waits for it to end is not something this
+        // tap can safely assume either way. Reading the baseline here,
+        // synchronously, removes the question entirely: whatever happens
+        // to the deferred replay, the transition this tap cares about —
+        // `launchAtLoginAsked` going from false to true — is still exactly
+        // one flip away from a baseline that was read before either the
+        // setup card or the alert had any chance to touch it.
+        wasLaunchAtLoginAsked = environment.config.launchAtLoginAsked
+
         // A configuration that could not be written makes every later
         // assertion meaningless, so it is observed first. `@Published` replays
         // its current value to a new subscriber, which is how a failure during
@@ -229,6 +247,23 @@ final class HarnessJournal: @unchecked Sendable {
             ])
         }
         wasFirstRunCompleted = completed
+
+        // One event for both places that can flip this: the setup card's
+        // checkbox (`SetupModel.finish()`) and `LaunchAtLoginPrompt`'s alert
+        // for an install that skips the card entirely. Observing the
+        // configuration rather than tapping each call site is what makes
+        // that true without either one having to know the journal exists —
+        // the same reasoning `setupShown`/`setupFinished` above already
+        // follow. `LaunchAtLogin.isEnabled` re-reads `SMAppService` rather
+        // than trusting what was just requested, for the same reason
+        // `SettingsModel.launchAtLogin` does: a registration that failed or
+        // needs approval shows up here as `enabled: false`, not as a report
+        // that lied.
+        let launchAtLoginAsked = environment.config.launchAtLoginAsked
+        if launchAtLoginAsked, wasLaunchAtLoginAsked == false {
+            append(.launchAtLoginAsked, ["enabled": .boolean(LaunchAtLogin.isEnabled)])
+        }
+        wasLaunchAtLoginAsked = launchAtLoginAsked
     }
 
     // MARK: - Taps that are called

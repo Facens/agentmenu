@@ -105,6 +105,7 @@ enum ConfigCodec {
         var config = Config()
         config.activeProfileID = root["active_profile"]?.stringValue
         config.firstRunCompleted = root["first_run_completed"]?.boolValue ?? false
+        config.launchAtLoginAsked = root["launch_at_login_asked"]?.boolValue ?? false
         config.defaults = decodePreset(root["defaults"]?.tableValue ?? TOMLTable())
         config.betaUpdates = root["updates"]?.tableValue?["beta"]?.boolValue
 
@@ -225,6 +226,16 @@ enum ConfigCodec {
             root.set(.boolean(true), at: ["first_run_completed"])
         } else {
             root.removeValue(forKey: "first_run_completed")
+        }
+
+        // Same shape as `first_run_completed` just above, and for the same
+        // reason: a fresh config carries no trace of a question nobody has
+        // been asked yet, and the key appears the moment the answer is
+        // recorded — never `= false`.
+        if config.launchAtLoginAsked {
+            root.set(.boolean(true), at: ["launch_at_login_asked"])
+        } else {
+            root.removeValue(forKey: "launch_at_login_asked")
         }
 
         var defaultsTable = root["defaults"]?.tableValue ?? TOMLTable()

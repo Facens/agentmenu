@@ -62,6 +62,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // and says why, in Settings and on stderr.
         _ = environment.updater
         statusItem = StatusItemController(environment: environment)
+        // After the status item, not before: the menu bar icon should
+        // already be up by the time this steals focus (LaunchAtLoginPrompt's
+        // own doc comment). No-ops instantly for the common case — a fresh
+        // install (`firstRunCompleted` still false, the setup card's own
+        // checkbox asks instead) or an install that has already answered.
+        LaunchAtLoginPrompt.presentIfNeeded(environment: environment)
         // Pay the Apple Event setup cost now rather than on the first click.
         FinderTarget.warmUp()
 

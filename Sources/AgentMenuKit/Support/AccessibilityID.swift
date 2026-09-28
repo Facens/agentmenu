@@ -64,6 +64,11 @@ public enum AccessibilityID {
         public static func agentToggle(_ agentID: String) -> String { "setup.agent.\(agentID).toggle" }
         public static func agentMakeDefault(_ agentID: String) -> String { "setup.agent.\(agentID).makeDefault" }
         public static func folderToggle(path: String) -> String { "setup.folder.\(pathHash(path)).toggle" }
+        /// The card's own "launch at login?" checkbox — shown only while
+        /// `!config.launchAtLoginAsked` (`SetupCard.swift`), so it can be on
+        /// this card's first appearance and gone from every later one, folder-
+        /// only re-opens included (`SetupModel.isNeeded`).
+        public static let launchAtLogin = "setup.launchAtLogin"
         public static let addFolder = "setup.addFolder"
         public static let done = "setup.done"
     }
@@ -197,5 +202,23 @@ public enum AccessibilityID {
             public static let detailChooseFolder = "settings.folders.detail.chooseFolder"
             public static let detailAccountPicker = "settings.folders.detail.accountPicker"
         }
+    }
+
+    // MARK: Launch-at-login prompt
+
+    /// `LaunchAtLoginPrompt.swift`'s one-shot native alert, for an install
+    /// that reaches a build carrying this question with `firstRunCompleted`
+    /// already true — so the setup card's own checkbox (`Setup.launchAtLogin`
+    /// above) never gets a chance to ask it. Set on the alert's own buttons
+    /// the same way every other control in this app gets an identifier
+    /// (KTD9), even though the harness answers this particular alert the way
+    /// it already answers `ProfilesPane.installBridge`'s — by process and
+    /// text, through the shared `dialogs.applescript`'s `alert` kind — because
+    /// that file is byte-identical across both repositories
+    /// (harness/SHARED.sha256) and cannot be handed an app-specific
+    /// AXIdentifier to look for.
+    public enum LaunchAtLoginPrompt {
+        public static let accept = "launchAtLoginPrompt.accept"
+        public static let decline = "launchAtLoginPrompt.decline"
     }
 }

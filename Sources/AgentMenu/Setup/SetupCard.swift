@@ -18,6 +18,7 @@ struct SetupCard: View {
         VStack(alignment: .leading, spacing: 10) {
             agents
             folders
+            launchAtLogin
             HStack {
                 Button("Add another folder…") { model.chooseFolders() }
                     .controlSize(.small)
@@ -99,6 +100,21 @@ struct SetupCard: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    // MARK: Launch at login
+
+    /// Asked once, here, and never again (`SetupModel.finish()`'s own
+    /// guard) — so this checkbox is gone from every later appearance of the
+    /// card, folder-only re-opens included, not just unticked.
+    @ViewBuilder
+    private var launchAtLogin: some View {
+        if LaunchAtLoginQuestion.surface(for: model.config) == .setupCard {
+            Toggle("Launch AgentMenu at login", isOn: $model.launchAtLoginChoice)
+                .toggleStyle(.checkbox)
+                .font(.system(size: 12))
+                .accessibilityIdentifier(AccessibilityID.Setup.launchAtLogin)
         }
     }
 

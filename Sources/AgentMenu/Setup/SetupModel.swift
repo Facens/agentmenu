@@ -24,6 +24,14 @@ final class SetupModel: ObservableObject {
     @Published private(set) var detectedAgents: [Detection.AgentHit] = []
     @Published private(set) var suggestedFolders: [String] = []
     @Published private(set) var detecting = false
+    /// The card's own answer to "launch at login?", live-edited by its
+    /// checkbox and committed only once, in `finish()` — not read back from
+    /// `LaunchAtLogin.isEnabled` the way `SettingsModel.launchAtLogin` is,
+    /// because there is nothing to read yet: the question has not been asked.
+    /// Defaults on, matching the product decision that launching at login is
+    /// what most people want and the checkbox is there for the minority who
+    /// don't.
+    @Published var launchAtLoginChoice = true
 
     private unowned let environment: AppEnvironment
     private var cancellables: Set<AnyCancellable> = []
@@ -139,7 +147,23 @@ final class SetupModel: ObservableObject {
         for url in panel.urls { setFolder(PathDisplay.abbreviated(url.path), added: true) }
     }
 
+    /// Commits the login-item question exactly once. A folder-only re-open of
+    /// this card (`isNeeded` again once the folder list is empty, even with
+    /// `firstRunCompleted` already true) must not re-ask it — the checkbox
+    /// itself is already hidden by then (`SetupCard.swift`), and this guard
+    /// is what stops a re-render that briefly shows the stale default from
+    /// re-registering the login item behind the user's back.
     func finish() {
+        if LaunchAtLoginQuestion.surface(for: config) == .setupCard {
+            // Only the "yes" is ever asked for: a fresh install has never
+            // been registered, so there is nothing to unregister on a "no"
+            // — calling `LaunchAtLogin.set(false)` here would ask
+            // `SMAppService` to undo a registration that never happened,
+            // for no reason beyond symmetry. `LaunchAtLoginPrompt`'s alert
+            // keeps to the same rule (it never calls `set(false)` either).
+            if launchAtLoginChoice { LaunchAtLogin.set(true) }
+            environment.update { $0.launchAtLoginAsked = true }
+        }
         environment.update { $0.firstRunCompleted = true }
         environment.flushPendingSave()
     }

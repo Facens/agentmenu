@@ -21,6 +21,12 @@ public enum JournalEvent: String, CaseIterable, Sendable {
     case detectingFinished = "detecting finished"
     case setupShown = "setup shown"
     case setupFinished = "setup finished"
+    /// The launch-at-login question's own answer, once — from the setup
+    /// card's checkbox on a fresh install, or from `LaunchAtLoginPrompt`'s
+    /// one-shot alert on an install that already finished first run before
+    /// the question existed. Fires on the one transition that matters:
+    /// `launch_at_login_asked` going from unset/false to true.
+    case launchAtLoginAsked = "launch at login asked"
     case launchRequested = "launch requested"
     case launchResult = "launch result"
     case bridgeInstalled = "bridge installed"

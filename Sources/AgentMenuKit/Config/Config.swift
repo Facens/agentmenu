@@ -147,6 +147,16 @@ public struct Config: Equatable {
 
     public var activeProfileID: String?
     public var firstRunCompleted: Bool
+    /// Whether the user has ever been asked "launch at login?" — inside the
+    /// setup card for a fresh install, or from `LaunchAtLoginPrompt`'s
+    /// one-shot alert for an install that reached this build with
+    /// `firstRunCompleted` already true from before the question existed.
+    /// Written `true` the moment either one is answered, either answer
+    /// counting: a "Not Now" is still an answer, and the whole point of this
+    /// flag is that nobody sees the question twice. Afterwards the
+    /// `Settings` › General toggle (`GeneralPane.swift`) is the only way to
+    /// change it, the same as it always was.
+    public var launchAtLoginAsked: Bool
     public var defaults: Preset
     public var profiles: [Profile]
     public var folders: [FolderTarget]
@@ -176,6 +186,7 @@ public struct Config: Equatable {
     public init() {
         activeProfileID = nil
         firstRunCompleted = false
+        launchAtLoginAsked = false
         defaults = Preset()
         profiles = []
         folders = []

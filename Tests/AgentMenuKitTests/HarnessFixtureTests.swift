@@ -53,6 +53,7 @@ func runHarnessFixtureTests(_ t: TestRunner) {
     hfix_testFirstRunFixture(t, harnessDir: harnessDir)
     hfix_testConfiguredTerminalFixture(t, harnessDir: harnessDir)
     hfix_testConfiguredProfileFixture(t, harnessDir: harnessDir)
+    hfix_testNeedsLoginPromptFixture(t, harnessDir: harnessDir)
 }
 
 // MARK: - Every new shell file parses under `bash -n`, and every apply.sh /
@@ -66,7 +67,7 @@ private func hfix_testShellFilesParseAndAreExecutable(
         harnessDir.appendingPathComponent("lib/fixtures.sh").path,
         fixturesDir.appendingPathComponent("_lib.sh").path,
     ]
-    for fixture in ["first-run", "configured-terminal", "configured-profile"] {
+    for fixture in ["first-run", "configured-terminal", "configured-profile", "needs-login-prompt"] {
         files.append(fixturesDir.appendingPathComponent("\(fixture)/apply.sh").path)
     }
     for scenario in hfix_scenarioNames {
@@ -84,7 +85,12 @@ private func hfix_testShellFilesParseAndAreExecutable(
     }
 }
 
-/// The seven R9 scenario names, in the same order the plan lists them.
+/// The seven R9 scenario names, in the same order the plan lists them, plus
+/// `launch-at-login-prompt` — the scenario that proves the existing-install
+/// alert path `LaunchAtLoginPrompt.presentIfNeeded` raises, which none of
+/// the original seven reach (`agentmenu/configured-profile` and
+/// `agentmenu/configured-terminal` both now seed `launch_at_login_asked =
+/// true` specifically so they don't).
 private let hfix_scenarioNames = [
     "vanilla-first-run",
     "launch-terminal",
@@ -93,6 +99,7 @@ private let hfix_scenarioNames = [
     "profile-personal-only",
     "profile-both",
     "bridge-install",
+    "launch-at-login-prompt",
 ]
 
 // MARK: - Every scenario clicks, so every scenario declares
@@ -168,15 +175,20 @@ private func hfix_testFixtureFilesAreSynthetic(_ t: TestRunner, fixturesDir: URL
 // VM is cloned — is `harness/run.sh selfcheck --list-ids <bundle-id>`
 // against a live, built app; that genuinely needs the VM (see this unit's
 // own report). This is what can be proven without one: every `click
-// "$BUNDLE_ID" "<literal>"` call in every one of the seven scenarios names
+// "$BUNDLE_ID" "<literal>"` call in every one of the eight scenarios names
 // something this file can show is shaped like a real identifier.
 
 private func hfix_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenariosDir: URL) {
-    // Every literal (non-interpolated) identifier the seven scenarios click,
-    // plus the two computed shapes (`setup.folder.<hash>.toggle`,
+    // Every literal (non-interpolated) identifier the eight scenarios
+    // click, plus the two computed shapes (`setup.folder.<hash>.toggle`,
     // `popover.row.<hash>.launch`) matched by prefix/suffix instead.
+    // `launch-at-login-prompt.sh` clicks nothing at all — it answers a
+    // native alert through `dialog`, not `click` — so it contributes no
+    // entries here, and `setup.launchAtLogin` is vanilla-first-run.sh's own
+    // addition (`AccessibilityID.Setup.launchAtLogin`).
     let knownLiterals: Set<String> = [
         "setup.done",
+        "setup.launchAtLogin",
         "popover.gear",
         "settings.tab.accounts",
         "settings.accounts.installBridge",
@@ -391,6 +403,7 @@ private func hfix_testConfiguredTerminalFixture(_ t: TestRunner, harnessDir: URL
         return
     }
     t.expect(config.contains("first_run_completed = true"), "config.toml marks first run completed, so the popover skips the setup card")
+    t.expect(config.contains("launch_at_login_asked = true"), "config.toml marks the login-item question already asked, so LaunchAtLoginPrompt does not block this scenario's launch behind an unanswered alert")
     t.expect(config.contains("id = \"harness-checkout\""), "config.toml carries the folder id the scenario computes its rowKey from")
     t.expect(config.contains("[terminals.terminal-app]") && config.contains("trusted = true"), "config.toml trusts the user-origin terminal-app manifest directly, so the launch scenario stays click-free")
     t.expect(config.contains("claude = \"\(rig.home)/.local/bin/claude\""), "config.toml's [binaries] entry is a real absolute path under the fixture's own $HOME, not a literal ~")
@@ -422,6 +435,7 @@ private func hfix_testConfiguredProfileFixture(_ t: TestRunner, harnessDir: URL)
         return
     }
     t.expect(config.contains("first_run_completed = true"), "config.toml marks first run completed")
+    t.expect(config.contains("launch_at_login_asked = true"), "config.toml marks the login-item question already asked, so LaunchAtLoginPrompt does not block this scenario's launch behind an unanswered alert")
     t.expect(config.contains("id = \"work\""), "config.toml carries the one account bridge-install.sh expects Settings to select by default")
     t.expect(!config.contains("[[folders]]"), "no folder is configured — bridge-install.sh never launches anything")
 
@@ -431,4 +445,24 @@ private func hfix_testConfiguredProfileFixture(_ t: TestRunner, harnessDir: URL)
         FileManager.default.fileExists(atPath: profileDir, isDirectory: &isDirectory) && isDirectory.boolValue,
         "the profile's own configuration directory exists, so install-statusline has somewhere to write"
     )
+}
+
+// MARK: - agentmenu/needs-login-prompt: first run completed, the
+// login-item question never asked — the one shape `LaunchAtLoginPrompt.
+// presentIfNeeded` actually raises its alert for.
+
+private func hfix_testNeedsLoginPromptFixture(_ t: TestRunner, harnessDir: URL) {
+    guard let rig = hfix_makeRig("hf-needs-login-prompt", harnessDir: harnessDir, t: t) else { return }
+    defer { rig.dir.cleanup() }
+
+    let result = hfix_runDriver(rig, #"fixture agentmenu/needs-login-prompt "nonce-6""#)
+    t.expectEqual(result.status, 0, "agentmenu/needs-login-prompt applied cleanly — \(result.stderr)")
+
+    let configPath = rig.home + "/.config/agentmenu/config.toml"
+    guard let config = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+        t.expect(false, "config.toml was written at \(configPath)")
+        return
+    }
+    t.expect(config.contains("first_run_completed = true"), "config.toml marks first run completed — the setup card must not reappear")
+    t.expect(!config.contains("launch_at_login_asked"), "config.toml carries no launch_at_login_asked key at all — the exact shape a config.toml written before this question existed has, and the one LaunchAtLoginPrompt.presentIfNeeded's guard (`!config.launchAtLoginAsked`) is written to catch")
 }

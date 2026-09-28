@@ -83,6 +83,40 @@ func runConfigStoreTests(_ t: TestRunner) {
         }
     }
 
+    // MARK: 1c. `launch_at_login_asked`, the "ask once" flag: written only
+    // once it is true, exactly like `first_run_completed`
+
+    do {
+        let dir = TempDir("configstore-launch-at-login-asked")
+        defer { dir.cleanup() }
+        let path = dir.path("config.toml")
+        let store = ConfigStore(url: URL(fileURLWithPath: path))
+
+        var config = Config()
+        t.expect(!config.launchAtLoginAsked, "a fresh config has never asked the launch-at-login question")
+
+        t.expectNoThrow("save a fresh config") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(!text.contains("launch_at_login_asked"), "an unasked question leaves no trace in the file")
+        }
+        if let reloaded = t.attempt("reload the fresh config", { try store.load() }) {
+            t.expect(reloaded?.launchAtLoginAsked == false, "the absent key decodes back to false, not to a crash or a default of true")
+        }
+
+        // Answered, either way — this flag does not distinguish "Launch at
+        // Login" from "Not Now"; it only records that the question is
+        // behind this configuration now (Config.swift's own comment on the
+        // field: "either answer counting").
+        config.launchAtLoginAsked = true
+        t.expectNoThrow("save after the question is answered") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(text.contains("launch_at_login_asked = true"), "the answer is recorded, written = true the same way first_run_completed is")
+        }
+        if let reloaded = t.attempt("reload after the question is answered", { try store.load() }) {
+            t.expectEqual(reloaded, config, "an answered launch-at-login question round-trips unchanged")
+        }
+    }
+
     // MARK: 2. Folder preset: model set, effort absent stays absent
 
     do {

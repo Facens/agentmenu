@@ -1,8 +1,9 @@
 #!/bin/bash
-# HARNESS_STRANGER_ONLY: ticks a setup-card folder toggle and clicks Done by
-# AXIdentifier, and screenshots the popover — screen-driving work this
-# harness confines to the stranger tier (harness/README.md, "Only the
-# stranger tier drives the screen").
+# HARNESS_STRANGER_ONLY: ticks a setup-card folder toggle, confirms the
+# launch-at-login checkbox, and clicks Done, all by AXIdentifier, and
+# screenshots the popover — screen-driving work this harness confines to
+# the stranger tier (harness/README.md, "Only the stranger tier drives the
+# screen").
 #
 # R9's vanilla first run: a stranger installs the shipped zip on a machine
 # that has never run AgentMenu, opens the menu-bar item, is shown the setup
@@ -71,9 +72,27 @@ FOLDER_HASH="$(fixtures_path_hash "$GUEST_HOME/$AGENTMENU_CHECKOUT_LEAF")"
 click "$BUNDLE_ID" "setup.folder.$FOLDER_HASH.toggle"
 log "ticked the suggested folder at \$HOME/$AGENTMENU_CHECKOUT_LEAF"
 
+step "launch at login"
+# The setup card's own "launch at login?" checkbox
+# (Sources/AgentMenu/Setup/SetupCard.swift), shown only while the question
+# has never been asked — which a truly vanilla first run has not been.
+# `click` waits for the AXIdentifier to exist before pressing it (lib/
+# scenario.sh), so this alone proves the control is there; clicking it
+# twice nets back to checked, the card's own default, so "finish setup"
+# below still accepts it the way a stranger who never touches this
+# checkbox would. The existing-install path — a config.toml carrying
+# `first_run_completed = true` from before this question existed — is
+# launch-at-login-prompt.sh's own scenario instead, since a vanilla first
+# run can never be that install.
+click "$BUNDLE_ID" "setup.launchAtLogin"
+click "$BUNDLE_ID" "setup.launchAtLogin"
+log "confirmed the launch-at-login checkbox is present and interactive; left checked, its own default"
+
 step "finish setup"
 click "$BUNDLE_ID" "setup.done"
 expect_event "setup finished" has_project_folder=true folder_count=2 > /dev/null
+LOGIN_RESULT="$(expect_event "launch at login asked" enabled=true)"
+log "launch at login asked: $(printf '%s' "$LOGIN_RESULT" | jq -c '.data')"
 shot "launcher" > /dev/null
 
 verdict pass

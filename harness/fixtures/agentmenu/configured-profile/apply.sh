@@ -13,6 +13,14 @@
 # `agentmenu install-statusline` CLI, which writes the bridge script and
 # rewrites `statusLine.command` inside it — the directory has to exist for
 # either write to land.
+#
+# `launch_at_login_asked = true` is here for the same reason
+# `first_run_completed = true` is: this fixture's whole point is a user who
+# is already past every one-time question, so `LaunchAtLoginPrompt.
+# presentIfNeeded` (Sources/AgentMenu/Support/LaunchAtLoginPrompt.swift)
+# must not raise its alert on top of a scenario that has nothing to do with
+# it — that alert blocks on `NSAlert.runModal()` until answered, and this
+# scenario never answers it.
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
@@ -31,6 +39,7 @@ cat > "$HOME/.config/agentmenu/config.toml" <<'EOF'
 schema = 1
 active_profile = "work"
 first_run_completed = true
+launch_at_login_asked = true
 
 [[profiles]]
 id = "work"

@@ -47,6 +47,7 @@ func runAccessibilityIDTests(_ t: TestRunner) {
         AccessibilityID.Setup.agentMakeDefault(agentB),
         AccessibilityID.Setup.folderToggle(path: folderA),
         AccessibilityID.Setup.folderToggle(path: folderB),
+        AccessibilityID.Setup.launchAtLogin,
         AccessibilityID.Setup.addFolder,
         AccessibilityID.Setup.done,
 
@@ -123,6 +124,10 @@ func runAccessibilityIDTests(_ t: TestRunner) {
         AccessibilityID.Settings.Folders.detailLabel,
         AccessibilityID.Settings.Folders.detailChooseFolder,
         AccessibilityID.Settings.Folders.detailAccountPicker,
+
+        // Launch-at-login prompt
+        AccessibilityID.LaunchAtLoginPrompt.accept,
+        AccessibilityID.LaunchAtLoginPrompt.decline,
     ]
 
     for id in representative {

@@ -9,6 +9,7 @@ let runner = TestRunner()
 
 runTOMLTests(runner)
 runConfigStoreTests(runner)
+runLaunchAtLoginQuestionTests(runner)
 runManifestRegistryTests(runner)
 runPresetResolverTests(runner)
 runCommandBuilderTests(runner)

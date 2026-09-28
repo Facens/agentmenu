@@ -32,6 +32,13 @@
 # than clicked, exactly as the plan's Approach section asks: "the fixture
 # seeds trust directly so the launch scenario stays click-free and
 # deterministic."
+#
+# `launch_at_login_asked = true`, for the same click-free reason: without
+# it `LaunchAtLoginPrompt.presentIfNeeded`
+# (Sources/AgentMenu/Support/LaunchAtLoginPrompt.swift) raises its own
+# alert on launch — before the click this scenario means to make — and
+# blocks on `NSAlert.runModal()` until something answers it, which nothing
+# here does.
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
@@ -83,6 +90,7 @@ cat > "$HOME/.config/agentmenu/config.toml" <<EOF
 schema = 1
 active_profile = "work"
 first_run_completed = true
+launch_at_login_asked = true
 
 [defaults]
 agent = "claude-code"
