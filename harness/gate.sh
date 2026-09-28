@@ -112,17 +112,57 @@ gate_deauthorize() {
     fi
 }
 
+# The fence between a failure note and the release notes underneath it.
+# Machine-written and machine-removed, which is the only reason
+# `gate_strip_note` is allowed to cut on it.
+_GATE_NOTE_FENCE="<!-- harness-gate-note -->"
+
 # Writes a note into the draft's body naming the run id only — never a
 # journal line, a path or a scenario's own failure text — through
 # --notes-file, per this file's own header. Best-effort: a note that could
 # not be written does not change the exit code this refusal already carries.
+#
+# It PREPENDS, and that is the whole point. `gh release edit --notes-file`
+# replaces the body outright, and doing that destroyed the generated notes of
+# agentmenu's v0.2.0 on 2026-09-22: the "Apple Silicon only" line, the
+# install instructions, the SHA-256 and the changelog link, all gone, with a
+# failed run's note left advertising itself on a release that had since
+# passed a clean gate. Nothing regenerates those — `release.yml` writes them
+# once, at build time, and a later run has no way back to them. So the note
+# goes above the body behind a fence, the body is kept, and `publish` takes
+# the note back off.
+#
+# Idempotent: a second failed run replaces the first note rather than
+# stacking on it, so what sits below the fence is always what the release
+# workflow wrote.
 gate_note_failure() {
-    local tag="$1" repo="$2" run_id="$3" notes
+    local tag="$1" repo="$2" run_id="$3" notes body
+    body="$(gh release view "$tag" --repo "$repo" --json body --jq '.body' 2>/dev/null || true)"
+    body="$(gate_strip_note "$body")"
     notes="$(mktemp "${TMPDIR:-/tmp}/harness-gate-notes.XXXXXX")"
-    printf 'harness gate run %s did not pass. See that run'\''s own report for detail; nothing else about it is written here.\n' "$run_id" > "$notes"
+    {
+        printf 'harness gate run %s did not pass. See that run'\''s own report for detail; nothing else about it is written here.\n' "$run_id"
+        printf '%s\n' "$_GATE_NOTE_FENCE"
+        printf '%s' "$body"
+    } > "$notes"
     gh release edit "$tag" --repo "$repo" --notes-file "$notes" \
         || warn "could not write the failure note into the draft body for '$tag'."
     rm -f "$notes"
+}
+
+# Everything below the fence, or the whole body when there is no fence.
+# Cutting on a marker this file wrote itself is safe in a way that cutting on
+# a sentence never would be.
+gate_strip_note() {
+    local body="$1"
+    case "$body" in
+        *"$_GATE_NOTE_FENCE"*)
+            # Drop everything through the fence and the newline after it.
+            local after="${body#*"$_GATE_NOTE_FENCE"}"
+            printf '%s' "${after#$'\n'}"
+            ;;
+        *) printf '%s' "$body" ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
@@ -387,6 +427,24 @@ cmd_publish() {
 
     log "screenshots for review:"
     jq -r '.screenshots[] | "  \(.scenario): \(.dir)"' "$report_path"
+
+    # An earlier failed run on this same draft left a note above the release
+    # notes. It comes off before the draft is flipped, never after, so the
+    # release is never visible to anyone carrying it.
+    local body stripped restore
+    body="$(gh release view "$tag" --repo "$repo" --json body --jq '.body' 2>/dev/null || true)"
+    stripped="$(gate_strip_note "$body")"
+    if [ "$stripped" != "$body" ]; then
+        restore="$(mktemp "${TMPDIR:-/tmp}/harness-gate-restore.XXXXXX")"
+        printf '%s' "$stripped" > "$restore"
+        if gh release edit "$tag" --repo "$repo" --notes-file "$restore"; then
+            log "removed an earlier failed run's note from the draft body"
+        else
+            rm -f "$restore"
+            die 3 "could not remove the failure note from '$tag'; refusing to publish a release whose notes advertise a run that did not pass."
+        fi
+        rm -f "$restore"
+    fi
 
     if ! gh release edit "$tag" --repo "$repo" --draft=false; then
         die 3 "could not publish '$tag' in '$repo'."

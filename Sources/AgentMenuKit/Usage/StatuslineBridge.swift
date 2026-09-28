@@ -183,6 +183,37 @@ public enum StatuslineBridge {
         return false
     }
 
+    // MARK: - Account guard (one account per history)
+
+    /// True when `stdin`'s rate-limit payload most likely belongs to a
+    /// different account's login than the one `existingHistory` already
+    /// belongs to — see `UsageHistory.weeklyPhase`. `existingHistory` is
+    /// whatever the file already holds *before* this payload's own reading
+    /// is folded in, the same rows the phase is established from in the
+    /// team status-line script this ports (the phase is fixed before the
+    /// current hour is appended, not after).
+    ///
+    /// A foreign payload still renders its own status line — nothing here
+    /// touches stdout — it simply must not be written: see
+    /// `writeUsageFiles`. When there is not yet enough `seven_day` evidence
+    /// to establish a phase at all (a fresh or nearly-empty history), every
+    /// payload is accepted — that is the only way a phase is ever learned.
+    ///
+    /// The decision reads `resets_at` alone, the way the script's `foreign =
+    /// not same_phase(phase, week_reset)` does — it does not also require a
+    /// `used_percentage` (unlike `windowFields`, which `snapshotJSON` and
+    /// `historyRow` both need): a `seven_day` object with a reset but no
+    /// usage yet is still enough to tell whose window it is.
+    public static func isForeignPayload(stdin: Data, existingHistory: UsageHistory, now: Date) -> Bool {
+        guard let phase = UsageHistory.weeklyPhase(rows: existingHistory.rows, now: now) else { return false }
+        guard let root = try? JSONSerialization.jsonObject(with: stdin) as? [String: Any],
+              let rateLimits = root["rate_limits"] as? [String: Any],
+              let sevenDay = rateLimits[UsageWindowKind.sevenDay.rawValue] as? [String: Any],
+              let resets = sevenDay["resets_at"] as? NSNumber, !isJSONBoolean(resets) else { return false }
+        let resetDate = Date(timeIntervalSince1970: resets.doubleValue)
+        return !UsageHistory.samePhase(phase, resetDate)
+    }
+
     // MARK: - History
 
     /// Builds one history observation from the same stdin JSON `snapshotJSON`
@@ -214,8 +245,19 @@ public enum StatuslineBridge {
     /// of `now` is dropped. Returns the full replacement file contents —
     /// there is no in-place patch, so the caller always rewrites the whole
     /// file (atomically, like the snapshot).
+    ///
+    /// Before merging, `existing`'s rows are trimmed to whatever weekly
+    /// phase they establish (`UsageHistory.trimmedToOwnPhase`) — the same
+    /// order the script does it in: the phase is fixed from the rows
+    /// already on disk, *then* the current hour is folded in. Because this
+    /// function always rewrites the whole file, a file that predates the
+    /// fix — or picked up foreign rows some other way — self-cleans the
+    /// next time anything merges into it, without needing a separate sweep.
+    /// `row` itself is assumed already vetted by `isForeignPayload` at the
+    /// call site; nothing here re-checks it.
     public static func mergeHistory(existing: String?, row: UsageHistoryRow, now: Date) -> String {
-        var rows = UsageHistory.parse(existing ?? "", now: now).rows
+        let parsed = UsageHistory.parse(existing ?? "", now: now)
+        var rows = parsed.trimmedToOwnPhase(now: now).history.rows
 
         if let index = rows.firstIndex(where: { $0.hourStart == row.hourStart }) {
             var merged = rows[index].windows
@@ -264,6 +306,59 @@ public enum StatuslineBridge {
         guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
               let text = String(data: data, encoding: .utf8) else { return "" }
         return text
+    }
+
+    // MARK: - Writing (the statusline-bridge subcommand's whole job)
+
+    /// Writes the snapshot and hourly history for one `statusLine` payload,
+    /// when the throttle and the account guard both allow it — the entire
+    /// body of what `agentmenu statusline-bridge` does before it runs its
+    /// chain. Lives here rather than in `Sources/AgentMenuCLI` so it can be
+    /// exercised directly instead of only through a subprocess; the CLI
+    /// command reads stdin and calls this.
+    ///
+    /// Order matters: the account guard runs after the throttle (so a
+    /// throttled turn never even reads the history file) and before either
+    /// write (so a foreign payload never reaches `snapshotJSON` or
+    /// `mergeHistory` at all).
+    ///
+    /// Every failure here is swallowed by design (R47: the bridge must
+    /// never take the status line down with it) — nothing in this function
+    /// is allowed to propagate.
+    public static func writeUsageFiles(stdinData: Data, profileDirectory: URL, now: Date) {
+        let snapshotURL = profileDirectory.appendingPathComponent(snapshotFilename)
+        let historyURL = profileDirectory.appendingPathComponent(UsageHistory.fileName)
+
+        let existingSnapshot = try? Data(contentsOf: snapshotURL)
+        // The throttle, unless this payload knows a window the file does
+        // not — see `carriesNewWindow`. Every session renders about once a
+        // minute, so a plain throttle hands the file to whichever one fires
+        // first after the boundary, and an idle session that never reports
+        // the 5-hour window keeps it out of the file indefinitely.
+        guard shouldWrite(existing: existingSnapshot, now: now)
+            || carriesNewWindow(stdin: stdinData, existing: existingSnapshot, now: now)
+        else { return }
+
+        let existingHistoryText = try? String(contentsOf: historyURL, encoding: .utf8)
+        let existingHistory = UsageHistory.parse(existingHistoryText ?? "", now: now)
+
+        // A payload from a different account's login than the one this
+        // history already belongs to is quiet, not merged — see
+        // `isForeignPayload`.
+        guard !isForeignPayload(stdin: stdinData, existingHistory: existingHistory, now: now) else {
+            return
+        }
+
+        if let snapshotData = snapshotJSON(from: stdinData, existing: existingSnapshot, now: now) {
+            try? atomicWrite(snapshotData, to: snapshotURL)
+        }
+
+        if let row = historyRow(from: stdinData, now: now) {
+            let newHistory = mergeHistory(existing: existingHistoryText, row: row, now: now)
+            if let data = newHistory.data(using: .utf8) {
+                try? atomicWrite(data, to: historyURL)
+            }
+        }
     }
 
     // MARK: - Atomic write

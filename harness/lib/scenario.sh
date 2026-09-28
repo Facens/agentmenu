@@ -159,6 +159,24 @@ _HARNESS_PROBE_BOUND=5
 # disappears -- so the number is a ceiling, never a cost.
 _HARNESS_QUIT_TICKS=150
 
+# How clear_quarantine relaunches: up to _HARNESS_RELAUNCH_TRIES calls to
+# `open`, each given _HARNESS_RELAUNCH_TICKS 0.2s ticks for the process to
+# appear before the next one.
+#
+# `open` is asked again rather than believed, because its exit status turned
+# out not to be the fact worth having. Asserting on it failed three of eight
+# scenarios in the v0.2.0 gate with "`open` failed with exit 1" — and a
+# fourth, `no-agent`, failed the other way round: `open` returned 0 and the
+# app never appeared. LaunchServices is still reaping a process pkill only
+# just removed from `pgrep`, and its answer in that window says nothing
+# either way about whether the app ends up running.
+#
+# Which is the rule this file already states everywhere else and that
+# assertion broke: a scenario asserts the state the app reports, never the
+# action the driver took. The state here is `pgrep -x`.
+_HARNESS_RELAUNCH_TRIES=5
+_HARNESS_RELAUNCH_TICKS=25
+
 # ---------------------------------------------------------------------------
 # Quoting and guest paths.
 
@@ -435,8 +453,20 @@ done
 if pgrep -x ${quoted_name} >/dev/null 2>&1; then printf 'alive '; else printf 'gone '; fi
 xattr -dr com.apple.quarantine ${quoted_app} 2>/dev/null
 if xattr -p com.apple.quarantine ${quoted_app} >/dev/null 2>&1; then printf 'quarantined '; else printf 'clean '; fi
-open ${quoted_app} >/dev/null 2>&1
-printf '%s' \$?"
+n=0
+while [ \$n -lt ${_HARNESS_RELAUNCH_TRIES} ]; do
+    open ${quoted_app} >/dev/null 2>&1
+    m=0
+    while [ \$m -lt ${_HARNESS_RELAUNCH_TICKS} ]; do
+        if pgrep -x ${quoted_name} >/dev/null 2>&1; then break; fi
+        sleep 0.2
+        m=\$((m+1))
+    done
+    if pgrep -x ${quoted_name} >/dev/null 2>&1; then break; fi
+    n=\$((n+1))
+done
+if pgrep -x ${quoted_name} >/dev/null 2>&1; then printf 'running '; else printf 'absent '; fi
+printf '%s' \$n"
 
     local out rc=0
     if out="$(bounded_run "$HARNESS_STEP_TIMEOUT" guest_run "$HARNESS_GUEST_IP" "$script")"; then rc=0; else rc=$?; fi
@@ -445,10 +475,11 @@ printf '%s' \$?"
     fi
     out="$(printf '%s' "$out" | tail -n 1 | tr -d '\r')"
 
-    local quit_state attribute_state open_rc
+    local quit_state attribute_state run_state retries
     quit_state="$(printf '%s' "$out" | awk '{print $1}')"
     attribute_state="$(printf '%s' "$out" | awk '{print $2}')"
-    open_rc="$(printf '%s' "$out" | awk '{print $3}')"
+    run_state="$(printf '%s' "$out" | awk '{print $3}')"
+    retries="$(printf '%s' "$out" | awk '{print $4}')"
 
     case "$quit_state" in
         gone) ;;
@@ -460,13 +491,18 @@ printf '%s' \$?"
         quarantined) _scenario_fail "clear_quarantine: com.apple.quarantine is still on $app after xattr -dr, so the relaunch would raise a second Gatekeeper sheet that no scenario answers." ;;
         *) _scenario_harness_error "clear_quarantine: the guest answered '$out', which does not name the quarantine attribute's state." ;;
     esac
-    case "$open_rc" in
+    case "$run_state" in
+        running) ;;
+        absent) _scenario_fail "clear_quarantine: $app_name was not running after ${_HARNESS_RELAUNCH_TRIES} attempts to open it from /Applications." ;;
+        *) _scenario_harness_error "clear_quarantine: the guest answered '$out', which does not name whether $app_name came back." ;;
+    esac
+    case "$retries" in
+        ''|*[!0-9]*) _scenario_harness_error "clear_quarantine: the guest answered '$out', which does not name how many relaunch attempts it took." ;;
         0) ;;
-        ''|*[!0-9]*) _scenario_harness_error "clear_quarantine: the guest answered '$out', which does not name open's exit status." ;;
-        *) _scenario_fail "clear_quarantine: \`open $app\` failed with exit $open_rc, so nothing was relaunched from /Applications." ;;
+        *) log "clear_quarantine: the relaunch needed $((retries + 1)) attempts — LaunchServices refused the first $retries" ;;
     esac
 
-    log "cleared the quarantine attribute and relaunched $app_name from /Applications: $app_name quit, the attribute is gone, open returned 0 (Finder does all three on consent; a shell mv does not, and the app runs translocated until it happens)"
+    log "cleared the quarantine attribute and relaunched $app_name from /Applications: $app_name quit, the attribute is gone, and it is running again (Finder does all three on consent; a shell mv does not, and the app runs translocated until it happens)"
     return 0
 }
 

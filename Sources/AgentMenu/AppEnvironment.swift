@@ -613,12 +613,24 @@ extension AppEnvironment: LaunchServicing {
     /// history, no projection — the same self-hiding rule as the readout, which
     /// is why it needs no setting of its own. Same profile-root routing as
     /// `usage(forProfile:)`, for the same reason.
+    ///
+    /// Before building the projector, the history is trimmed to this
+    /// account's own weekly phase (`UsageHistory.trimmedToOwnPhase`) — two
+    /// accounts sharing a config directory each reset their `seven_day`
+    /// window at a different point in the week, and without this a flip
+    /// back to the other account's window read as a fresh window starting
+    /// from zero, wildly inflating the projection. See the "one account per
+    /// history" comment on `UsageHistory` for the full story; the write
+    /// side of the same fix is `StatuslineBridge.writeUsageFiles`.
     func projector(forProfile profile: Profile) -> UsageProjector? {
         guard let template = snapshotTemplate else { return nil }
         let directory = Overrides.resolveProfileDirectory(profile.configDirectory, profileRoot: overrides.profileRoot)
         let url = UsageHistory.path(snapshotTemplate: template, profileDirectory: directory)
         guard let history = UsageHistory.read(at: url) else { return nil }
-        return UsageProjector(history: history)
+        let now = Date()
+        let trimmed = history.trimmedToOwnPhase(now: now).history
+        guard !trimmed.isEmpty else { return nil }
+        return UsageProjector(history: trimmed, now: now)
     }
 
     private var snapshotTemplate: String? {

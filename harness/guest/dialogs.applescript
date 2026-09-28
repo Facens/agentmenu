@@ -452,27 +452,32 @@ on verbWait(kind, timeoutSeconds)
     end repeat
 end verbWait
 
-on otherChoice(choice)
-    if choice is "allow" then return "deny"
-    return "allow"
-end otherChoice
-
 on verbAnswer(kind, choice, evidencePath)
     set {proc, win} to my locateDialogWindow(kind)
     tell application "System Events"
         set procName to my nameOf(proc)
         set winTitle to my nameOf(win)
         set candidates to my buttonSubstrings(kind, choice)
-        -- The other choice's substrings, and a button that matches them is
-        -- never this choice's button however well it also matches ours.
-        -- "Don't Allow" contains "allow", and it is the FIRST button on
-        -- every TCC sheet, so a plain first-match-wins loop answers `allow`
-        -- by pressing Don't Allow -- silently, reporting matched_by
-        -- "substring" as though it had read the right word. Caught on
-        -- 2026-09-21 by `launch-terminal`, which pressed "Don't Allow" and
-        -- then failed on AgentMenu's own accurate report that macOS had not
-        -- allowed it to control the terminal.
-        set opposite to my buttonSubstrings(kind, my otherChoice(choice))
+        -- Only `allow` excludes the other choice's matches, and the
+        -- asymmetry is the whole point: the deny substrings are negation
+        -- words ("don", "cancel", "trash") and they are what discriminates.
+        --
+        -- "Don't Allow" contains "allow" and is the FIRST button on every
+        -- TCC sheet, so a plain first-match-wins loop answers `allow` by
+        -- pressing Don't Allow -- silently, reporting matched_by
+        -- "substring" as though it had read the right word (caught
+        -- 2026-09-21 by `launch-terminal`, which then failed on AgentMenu's
+        -- own accurate report that macOS had not allowed it to control the
+        -- terminal). But excluding symmetrically breaks the opposite case:
+        -- "Don't Allow" matches the allow list too, so `deny` would skip the
+        -- one button it is looking for and fall through to the position
+        -- fallback. That is exactly what happened to MeetingHop's
+        -- `access-denied` on 2026-09-22 -- it asked to deny, the guess
+        -- landed on "Allow Full Access", and the app correctly journalled
+        -- `calendar access {granted: true}` for a scenario whose whole
+        -- subject is a refusal.
+        set opposite to {}
+        if choice is "allow" then set opposite to my buttonSubstrings(kind, "deny")
         set targetButton to missing value
         set targetButtonName to ""
         set matchedBy to "substring"

@@ -181,6 +181,220 @@ func runUsageProjectionTests(_ t: TestRunner) {
         t.expect(false, "a trusted profile with seven_day evidence produces a projection for a seven_day window")
     }
 
+    // MARK: Account phase (one-account-per-history guard)
+    //
+    // Two Claude accounts sharing a config directory each reset their
+    // seven_day window at their own point in the week — see the "one
+    // account per history" extension on `UsageHistory`. `samePhase` is the
+    // primitive the rest of the guard is built on.
+
+    let phaseBase = now.addingTimeInterval(-hour)
+    t.expect(UsageHistory.samePhase(phaseBase, phaseBase), "identical instants are the same phase")
+    t.expect(UsageHistory.samePhase(phaseBase, phaseBase.addingTimeInterval(hour)), "an hour off is still within the tolerance")
+    t.expect(!UsageHistory.samePhase(phaseBase, phaseBase.addingTimeInterval(hour + 1)), "one second past the tolerance is not")
+    t.expect(UsageHistory.samePhase(phaseBase, phaseBase.addingTimeInterval(UsageHistory.week)), "a whole week later is the same phase — a rollover")
+    t.expect(UsageHistory.samePhase(phaseBase.addingTimeInterval(UsageHistory.week), phaseBase), "…and the comparison is symmetric")
+    // The trap a naive `%` port falls into: `samePhase(a, b)` computes
+    // `a - b`, and here `b` (the later instant) is greater than `a`, so the
+    // raw difference is negative. Swift's `%` is a remainder, not a modulo,
+    // so an unguarded negative result would make `min(d, week - d)` negative
+    // too — which reads as <= 3600 for *any* later reset, wrongly reporting
+    // every later instant as the same phase. The mirror case just below
+    // (`b` earlier than `a`) never hits this, since the raw difference is
+    // already positive there.
+    t.expect(!UsageHistory.samePhase(phaseBase, phaseBase.addingTimeInterval(3 * 24 * hour)), "three days off is a different phase")
+    t.expect(!UsageHistory.samePhase(phaseBase, phaseBase.addingTimeInterval(-3 * 24 * hour)), "…and in the other direction too")
+
+    let ownPhase = now.addingTimeInterval(-6 * hour)
+    let foreignPhase = ownPhase.addingTimeInterval(2 * 24 * hour)
+
+    let phaseRows: [UsageHistoryRow] = [
+        // Both ends on the account's own phase: kept exactly as it was.
+        UsageHistoryRow(hourStart: now.addingTimeInterval(-6 * hour), windows: [
+            .sevenDay: WindowObservation(usedFirst: 10, usedLast: 12, resetFirst: ownPhase, resetLast: ownPhase),
+        ]),
+        // five_hour only, no seven_day at all: untouched regardless of phase.
+        UsageHistoryRow(hourStart: now.addingTimeInterval(-5 * hour), windows: [
+            .fiveHour: WindowObservation(usedFirst: 1, usedLast: 2, resetFirst: ownPhase, resetLast: ownPhase),
+        ]),
+        // Only resetFirst matches: a mid-hour flip TO a foreign session.
+        // Collapses to a first-equals-last pair; five_hour is untouched.
+        UsageHistoryRow(hourStart: now.addingTimeInterval(-4 * hour), windows: [
+            .fiveHour: WindowObservation(usedFirst: 30, usedLast: 31, resetFirst: ownPhase, resetLast: ownPhase),
+            .sevenDay: WindowObservation(usedFirst: 5, usedLast: 99, resetFirst: ownPhase, resetLast: foreignPhase),
+        ]),
+        // Only resetLast matches: a mid-hour flip FROM a foreign session.
+        UsageHistoryRow(hourStart: now.addingTimeInterval(-3 * hour), windows: [
+            .sevenDay: WindowObservation(usedFirst: 77, usedLast: 8, resetFirst: foreignPhase, resetLast: ownPhase),
+        ]),
+        // Neither end matches: the whole hour is a foreign session's — its
+        // five_hour reading goes with it, and the row disappears entirely.
+        UsageHistoryRow(hourStart: now.addingTimeInterval(-2 * hour), windows: [
+            .fiveHour: WindowObservation(usedFirst: 40, usedLast: 85, resetFirst: foreignPhase, resetLast: foreignPhase),
+            .sevenDay: WindowObservation(usedFirst: 3, usedLast: 6, resetFirst: foreignPhase, resetLast: foreignPhase),
+        ]),
+        // A legit rollover: resetFirst and resetLast are the SAME account's
+        // reset, exactly one week apart. Both ends independently match the
+        // phase, so this is the "keep unchanged" branch, not a collapse.
+        UsageHistoryRow(hourStart: now.addingTimeInterval(-1 * hour), windows: [
+            .sevenDay: WindowObservation(
+                usedFirst: 95, usedLast: 3,
+                resetFirst: ownPhase, resetLast: ownPhase.addingTimeInterval(UsageHistory.week)
+            ),
+        ]),
+    ]
+
+    let establishedPhase = UsageHistory.weeklyPhase(rows: phaseRows, now: now)
+    t.expect(establishedPhase != nil, "a phase is established from the majority of the evidence")
+    if let establishedPhase {
+        t.expect(UsageHistory.samePhase(establishedPhase, ownPhase), "the established phase is the account's own, not the foreign one (6 own observations vs 4 foreign)")
+    }
+
+    t.expect(UsageHistory.weeklyPhase(rows: [], now: now) == nil, "no rows at all -> no phase, so a fresh history accepts any payload")
+    t.expect(
+        UsageHistory.weeklyPhase(rows: [UsageHistoryRow(hourStart: now, windows: [.fiveHour: WindowObservation(usedFirst: 1, usedLast: 1, resetFirst: now, resetLast: now)])], now: now) == nil,
+        "no seven_day evidence at all -> no phase either"
+    )
+
+    if let establishedPhase {
+        let trimmedPhaseRows = UsageHistory.trimmed(rows: phaseRows, toPhase: establishedPhase)
+        t.expectEqual(trimmedPhaseRows.count, 5, "the fully-foreign row is dropped; the other five all keep something")
+
+        func row(at offset: Double) -> UsageHistoryRow? {
+            trimmedPhaseRows.first { $0.hourStart == now.addingTimeInterval(offset * hour) }
+        }
+
+        if let kept = row(at: -6) {
+            t.expectEqual(kept.windows[.sevenDay], WindowObservation(usedFirst: 10, usedLast: 12, resetFirst: ownPhase, resetLast: ownPhase), "both ends on-phase: unchanged")
+        } else {
+            t.expect(false, "the both-ends-own-phase row survives")
+        }
+
+        if let untouched = row(at: -5) {
+            t.expect(untouched.windows[.fiveHour] != nil, "a row with no seven_day at all is left alone")
+            t.expect(untouched.windows[.sevenDay] == nil, "…and still has no seven_day")
+        } else {
+            t.expect(false, "the five_hour-only row survives untouched")
+        }
+
+        if let collapsedFirst = row(at: -4) {
+            t.expectEqual(
+                collapsedFirst.windows[.sevenDay],
+                WindowObservation(usedFirst: 5, usedLast: 5, resetFirst: ownPhase, resetLast: ownPhase),
+                "only resetFirst matched: collapsed to a first-equals-last pair on that reading"
+            )
+            t.expect(collapsedFirst.windows[.fiveHour] != nil, "five_hour survives when seven_day only collapses, rather than drops")
+        } else {
+            t.expect(false, "the only-resetFirst-matches row survives, collapsed")
+        }
+
+        if let collapsedLast = row(at: -3) {
+            t.expectEqual(
+                collapsedLast.windows[.sevenDay],
+                WindowObservation(usedFirst: 8, usedLast: 8, resetFirst: ownPhase, resetLast: ownPhase),
+                "only resetLast matched: collapsed to a first-equals-last pair on that reading"
+            )
+        } else {
+            t.expect(false, "the only-resetLast-matches row survives, collapsed")
+        }
+
+        t.expect(row(at: -2) == nil, "neither end matched: the whole row — five_hour included — is dropped")
+
+        if let rollover = row(at: -1) {
+            t.expectEqual(
+                rollover.windows[.sevenDay],
+                WindowObservation(usedFirst: 95, usedLast: 3, resetFirst: ownPhase, resetLast: ownPhase.addingTimeInterval(UsageHistory.week)),
+                "a legit rollover exactly one week apart is kept unchanged, not collapsed"
+            )
+        } else {
+            t.expect(false, "the legit-rollover row survives unchanged")
+        }
+    }
+
+    // MARK: Account phase — a foreign account's usage does not inflate the projection
+    //
+    // The bug this whole guard exists for: a second account interleaved into
+    // the same history file, its flips back to its own weekly window each
+    // read by `UsageProjector.deltas` as a brand-new instance starting from
+    // zero — so its usage counted as this account's fresh spend, and 2% of
+    // a work week projected 189%. Trimming the history to this account's own
+    // phase before building the projector must recover exactly the
+    // projection a clean, single-account history would have produced.
+
+    let ownWeekReset = now.addingTimeInterval(-hour)
+    let foreignWeekReset = ownWeekReset.addingTimeInterval(2 * 24 * hour)
+
+    // Eight days, not six: `project()` only gives a forward hour a nonzero
+    // share when the activity profile has seen that exact (weekday, hour)
+    // slot before, and weekdays repeat every 7 days, not every 1 — six days
+    // of history never revisits *today's* weekday at all, so the walk from
+    // `now` would spend on a share of zero regardless of the rate behind it,
+    // and the inflation check below would pass vacuously. The eighth day
+    // back (`day == 1`, seven days before `now`) is today's weekday, so the
+    // three hours the walk actually covers (`now` through `now + 3h`) each
+    // get a real, observed-active share.
+    var cleanAccountRows: [UsageHistoryRow] = []
+    for day in 0..<8 {
+        for slot in 0..<3 {
+            let start = hourStart(now.addingTimeInterval(Double(-(8 - day)) * 24 * hour + Double(slot) * hour))
+            cleanAccountRows.append(UsageHistoryRow(hourStart: start, windows: [
+                .fiveHour: WindowObservation(
+                    usedFirst: Double(slot * 5), usedLast: Double((slot + 1) * 5),
+                    resetFirst: start.addingTimeInterval(5 * hour), resetLast: start.addingTimeInterval(5 * hour)
+                ),
+                .sevenDay: WindowObservation(
+                    usedFirst: Double(day), usedLast: Double(day + 1),
+                    resetFirst: ownWeekReset, resetLast: ownWeekReset
+                ),
+            ]))
+        }
+    }
+
+    // A second account's own hours, spliced into the same file at hours the
+    // clean fixture never touches (the most recent four), each one entirely
+    // its own reading — a foreign weekly phase and a much larger five_hour
+    // jump, exactly what sharing the file with a different login looks like.
+    var interleavedAccountRows = cleanAccountRows
+    for extra in 0..<4 {
+        let start = hourStart(now.addingTimeInterval(Double(-(4 - extra)) * hour))
+        interleavedAccountRows.append(UsageHistoryRow(hourStart: start, windows: [
+            .fiveHour: WindowObservation(
+                usedFirst: 40, usedLast: 85,
+                resetFirst: start.addingTimeInterval(5 * hour), resetLast: start.addingTimeInterval(5 * hour)
+            ),
+            .sevenDay: WindowObservation(usedFirst: 3, usedLast: 6, resetFirst: foreignWeekReset, resetLast: foreignWeekReset),
+        ]))
+    }
+
+    let (trimmedInterleaved, interleavedPhase) = UsageHistory(rows: interleavedAccountRows).trimmedToOwnPhase(now: now)
+    t.expect(interleavedPhase != nil, "the interleaved file establishes a phase (far more own observations than the 4 foreign hours)")
+    t.expectEqual(trimmedInterleaved, UsageHistory(rows: cleanAccountRows), "trimming the interleaved history recovers exactly the clean single-account one")
+
+    let cleanProjector = UsageProjector(history: UsageHistory(rows: cleanAccountRows), calendar: calendar, now: now)
+    let trimmedProjector = UsageProjector(history: trimmedInterleaved, calendar: calendar, now: now)
+    t.expect(cleanProjector.isTrusted, "the clean fixture is eight active days, same as the interleaved one")
+
+    let accountWindow = UsageWindow(kind: .fiveHour, usedPercentage: 30, resetsAt: now.addingTimeInterval(3 * hour))
+    let cleanProjection = cleanProjector.projection(for: accountWindow, now: now)
+    let trimmedProjection = trimmedProjector.projection(for: accountWindow, now: now)
+    t.expectEqual(trimmedProjection, cleanProjection, "the trimmed interleaved history projects exactly like the clean single-account history")
+    t.expectEqual(cleanProjection?.basis, .learned, "the clean fixture is trusted, so this is the learned model, not the wall-clock fallback")
+    t.expectEqual(trimmedProjection?.basis, .learned, "…and so is the trimmed one")
+
+    // And prove the fixture actually reproduces the bug: skipping the trim
+    // lets the foreign account's usage inflate the projection. The foreign
+    // hours sit just behind `now`, so under the recency-weighted rate they
+    // dominate the burn estimate applied to the very hours the walk spends —
+    // even though the walk itself never steps into those foreign hours.
+    let untrimmedProjector = UsageProjector(history: UsageHistory(rows: interleavedAccountRows), calendar: calendar, now: now)
+    let untrimmedProjection = untrimmedProjector.projection(for: accountWindow, now: now)
+    t.expect(
+        (untrimmedProjection?.projectedAtReset ?? 0) > (cleanProjection?.projectedAtReset ?? 0) + 20,
+        "without the trim, the foreign account's reading inflates the projection well past the clean one "
+            + "(clean: \(cleanProjection?.projectedAtReset ?? -1), untrimmed: \(untrimmedProjection?.projectedAtReset ?? -1)) "
+            + "— this is the bug the fix addresses"
+    )
+
     // MARK: DST fall-back — the projection walk must terminate (finding #1)
 
     ({

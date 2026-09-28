@@ -67,43 +67,12 @@ func runStatuslineBridge(_ args: [String]) -> Int32 {
     let stdinData = FileHandle.standardInput.readDataToEndOfFile()
     let directoryURL = URL(fileURLWithPath: (profileDirectory as NSString).expandingTildeInPath)
 
-    writeUsageFiles(stdinData: stdinData, profileDirectory: directoryURL, now: Date())
+    StatuslineBridge.writeUsageFiles(stdinData: stdinData, profileDirectory: directoryURL, now: Date())
 
     guard let chain, !chain.isEmpty else {
         return 0
     }
     return runChain(chain, stdin: stdinData)
-}
-
-/// Writes the snapshot and hourly history when the throttle allows it, both
-/// gated by the same check so there is one throttle, not two. Every failure
-/// here is swallowed by design (R47: the bridge must never take the status
-/// line down with it) — nothing in this function is allowed to propagate.
-private func writeUsageFiles(stdinData: Data, profileDirectory: URL, now: Date) {
-    let snapshotURL = profileDirectory.appendingPathComponent(StatuslineBridge.snapshotFilename)
-    let historyURL = profileDirectory.appendingPathComponent(UsageHistory.fileName)
-
-    let existingSnapshot = try? Data(contentsOf: snapshotURL)
-    // The throttle, unless this payload knows a window the file does not —
-    // see `carriesNewWindow`. Every session renders about once a minute, so
-    // a plain throttle hands the file to whichever one fires first after the
-    // boundary, and an idle session that never reports the 5-hour window
-    // keeps it out of the file indefinitely.
-    guard StatuslineBridge.shouldWrite(existing: existingSnapshot, now: now)
-        || StatuslineBridge.carriesNewWindow(stdin: stdinData, existing: existingSnapshot, now: now)
-    else { return }
-
-    if let snapshotData = StatuslineBridge.snapshotJSON(from: stdinData, existing: existingSnapshot, now: now) {
-        try? StatuslineBridge.atomicWrite(snapshotData, to: snapshotURL)
-    }
-
-    if let row = StatuslineBridge.historyRow(from: stdinData, now: now) {
-        let existingHistory = try? String(contentsOf: historyURL, encoding: .utf8)
-        let newHistory = StatuslineBridge.mergeHistory(existing: existingHistory, row: row, now: now)
-        if let data = newHistory.data(using: .utf8) {
-            try? StatuslineBridge.atomicWrite(data, to: historyURL)
-        }
-    }
 }
 
 /// Wall-clock cap on the chained command: past this, the bridge stops

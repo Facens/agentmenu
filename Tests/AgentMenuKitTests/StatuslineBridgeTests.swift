@@ -10,6 +10,7 @@ func runStatuslineBridgeTests(_ t: TestRunner) {
     runSnapshotTests(t)
     runThrottleTests(t)
     runHistoryTests(t)
+    runAccountGuardTests(t)
     runBridgeScriptTests(t)
     runBridgeRevalidationTests(t)
     runSettingsUpdateTests(t)
@@ -485,6 +486,126 @@ private func runHistoryTests(_ t: TestRunner) {
     } else {
         t.expect(false, "a payload with one valid window should still produce a row")
     }
+}
+
+// MARK: - Account guard (one account per history)
+
+private func runAccountGuardTests(_ t: TestRunner) {
+    let hour: TimeInterval = 3600
+    let day: TimeInterval = 24 * hour
+    let now = Date(timeIntervalSince1970: 1_789_500_000)
+
+    // `isForeignPayload`, directly against a constructed history — no file
+    // IO needed to check the phase arithmetic itself.
+    let ownReset = now.addingTimeInterval(-2 * hour)
+    let establishedHistory = UsageHistory(rows: [
+        UsageHistoryRow(hourStart: now.addingTimeInterval(-6 * hour), windows: [
+            .sevenDay: WindowObservation(usedFirst: 10, usedLast: 12, resetFirst: ownReset, resetLast: ownReset),
+        ]),
+        UsageHistoryRow(hourStart: now.addingTimeInterval(-3 * hour), windows: [
+            .sevenDay: WindowObservation(usedFirst: 12, usedLast: 15, resetFirst: ownReset, resetLast: ownReset),
+        ]),
+    ])
+
+    let ownPayload = ratePayload(sevenDay: (16, ownReset.timeIntervalSince1970))
+    t.expect(
+        !StatuslineBridge.isForeignPayload(stdin: ownPayload, existingHistory: establishedHistory, now: now),
+        "a payload on the established phase is not foreign"
+    )
+
+    // The `%` trap: `samePhase(phase, reset)` computes `phase - reset`, and
+    // a reset LATER than the phase makes that raw difference negative —
+    // exactly the case a naive, unguarded modulo port gets wrong.
+    let laterForeign = ratePayload(sevenDay: (5, ownReset.addingTimeInterval(2 * day).timeIntervalSince1970))
+    t.expect(
+        StatuslineBridge.isForeignPayload(stdin: laterForeign, existingHistory: establishedHistory, now: now),
+        "a reset two days later than the established phase is foreign"
+    )
+
+    // The mirror direction (reset earlier than the phase) never hits the
+    // trap above, since the raw difference there is already positive.
+    let earlierForeign = ratePayload(sevenDay: (5, ownReset.addingTimeInterval(-2 * day).timeIntervalSince1970))
+    t.expect(
+        StatuslineBridge.isForeignPayload(stdin: earlierForeign, existingHistory: establishedHistory, now: now),
+        "…and so is one two days earlier"
+    )
+
+    let rolledForeign = ratePayload(sevenDay: (5, ownReset.addingTimeInterval(UsageHistory.week).timeIntervalSince1970))
+    t.expect(
+        !StatuslineBridge.isForeignPayload(stdin: rolledForeign, existingHistory: establishedHistory, now: now),
+        "a reset exactly one week later is a legit rollover of the same account, not foreign"
+    )
+
+    t.expect(
+        !StatuslineBridge.isForeignPayload(stdin: ownPayload, existingHistory: UsageHistory(rows: []), now: now),
+        "an empty history has no phase yet, so nothing is foreign — this is the only way a phase is ever learned"
+    )
+
+    let fiveHourOnlyPayload = ratePayload(fiveHour: (10, now.addingTimeInterval(hour).timeIntervalSince1970))
+    t.expect(
+        !StatuslineBridge.isForeignPayload(stdin: fiveHourOnlyPayload, existingHistory: establishedHistory, now: now),
+        "a payload with no seven_day reading at all carries nothing to judge as foreign"
+    )
+
+    // MARK: `writeUsageFiles` — the full write path the CLI's
+    // statusline-bridge subcommand runs
+
+    let dir = TempDir("account-guard-write")
+    defer { dir.cleanup() }
+    let profileDir = dir.url
+    let snapshotURL = profileDir.appendingPathComponent(StatuslineBridge.snapshotFilename)
+    let historyURL = profileDir.appendingPathComponent(UsageHistory.fileName)
+
+    // Test: an empty/missing history accepts any payload — both files get
+    // written on the very first call, against a profile directory that
+    // starts out with neither.
+    let firstPayload = ratePayload(
+        fiveHour: (5, now.addingTimeInterval(3 * hour).timeIntervalSince1970),
+        sevenDay: (2, ownReset.timeIntervalSince1970)
+    )
+    StatuslineBridge.writeUsageFiles(stdinData: firstPayload, profileDirectory: profileDir, now: now)
+    t.expect(FileManager.default.fileExists(atPath: snapshotURL.path), "a payload against no existing files still writes the snapshot")
+    t.expect(FileManager.default.fileExists(atPath: historyURL.path), "…and the history")
+    let firstHistory = UsageHistory.read(at: historyURL, now: now)
+    t.expectEqual(firstHistory?.rows.count, 1, "one row after the first write — and it already carries seven_day, so a phase is now established")
+
+    // Age the snapshot's timestamp past the throttle, so the next call's
+    // outcome is decided by the account guard, not the once-a-minute gate.
+    if let existingSnapshot = try? Data(contentsOf: snapshotURL),
+       var object = (try? JSONSerialization.jsonObject(with: existingSnapshot)) as? [String: Any] {
+        object["ts"] = Int(now.addingTimeInterval(-120).timeIntervalSince1970)
+        if let rewritten = try? JSONSerialization.data(withJSONObject: object) {
+            try? rewritten.write(to: snapshotURL)
+        }
+    }
+
+    let beforeSnapshot = try? Data(contentsOf: snapshotURL)
+    let beforeHistory = try? Data(contentsOf: historyURL)
+    t.expect(beforeSnapshot != nil && beforeHistory != nil, "both files exist going into the foreign-payload check")
+
+    // Test: a foreign payload against this now-established history leaves
+    // both files byte-for-byte unchanged — it still would have cleared the
+    // throttle (the snapshot was just aged past it), so an unchanged file
+    // here can only be the account guard.
+    let laterNow = now.addingTimeInterval(180)
+    let foreignPayload = ratePayload(
+        fiveHour: (90, laterNow.addingTimeInterval(hour).timeIntervalSince1970),
+        sevenDay: (50, ownReset.addingTimeInterval(3 * day).timeIntervalSince1970)
+    )
+    StatuslineBridge.writeUsageFiles(stdinData: foreignPayload, profileDirectory: profileDir, now: laterNow)
+    t.expectEqual(try? Data(contentsOf: snapshotURL), beforeSnapshot, "a foreign payload writes nothing to the snapshot")
+    t.expectEqual(try? Data(contentsOf: historyURL), beforeHistory, "…nor to the history")
+
+    // Control: the identical setup, but an on-phase payload, DOES change
+    // both files — proving the previous no-op was the guard, not a
+    // coincidence (a throttle still in effect, an unwritable directory, …).
+    let ownPayloadLater = ratePayload(
+        fiveHour: (12, laterNow.addingTimeInterval(hour).timeIntervalSince1970),
+        sevenDay: (14, ownReset.timeIntervalSince1970)
+    )
+    StatuslineBridge.writeUsageFiles(stdinData: ownPayloadLater, profileDirectory: profileDir, now: laterNow)
+    t.expect((try? Data(contentsOf: snapshotURL)) != beforeSnapshot, "an on-phase payload against the same history DOES write the snapshot")
+    t.expect((try? Data(contentsOf: historyURL)) != beforeHistory, "…and the history")
 }
 
 // MARK: - Bridge script (happy / edge)
