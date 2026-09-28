@@ -3,6 +3,17 @@
     <channel>
         <title>AgentMenu</title>
         <item>
+            <title>0.2.1-beta.1</title>
+            <pubDate>Mon, 28 Sep 2026 10:41:55 +0000</pubDate>
+            <link>https://github.com/Facens/agentmenu</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>0.2.1.1</sparkle:version>
+            <sparkle:shortVersionString>0.2.1-beta.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/Facens/agentmenu/releases/download/v0.2.1-beta.1/AgentMenu-0.2.1-beta.1.zip" length="2255185" type="application/octet-stream" sparkle:edSignature="ZXu4P7f0vfpF3BvyURkAG+tHAlxmvsqCHUqoWhFSQKgUHov9ss8lE+EElSdqvz+a6aMotoaYs3eyJjke5wqLDA=="/>
+        </item>
+        <item>
             <title>0.2.0</title>
             <pubDate>Tue, 22 Sep 2026 08:28:04 +0000</pubDate>
             <link>https://github.com/Facens/agentmenu</link>
