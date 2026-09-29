@@ -34,7 +34,16 @@ enum LaunchAtLoginPrompt {
     @MainActor
     static func presentIfNeeded(environment: AppEnvironment) {
         guard LaunchAtLoginQuestion.surface(for: environment.config) == .launchAlert else { return }
+        // Not from inside `applicationDidFinishLaunching`. Called there, the
+        // alert's modal loop opens before launch has finished, so the
+        // activation below is asked for by an app that is not done starting
+        // and is ignored: the v0.2.2-beta.2 gate showed both buttons grey.
+        // One turn of the main queue later, launch is complete.
+        DispatchQueue.main.async { present(environment: environment) }
+    }
 
+    @MainActor
+    private static func present(environment: AppEnvironment) {
         let alert = NSAlert()
         alert.messageText = "Launch AgentMenu at login?"
         alert.informativeText = "Start automatically when you log in. You can change this anytime in Settings › General."
@@ -50,16 +59,22 @@ enum LaunchAtLoginPrompt {
         // Settings cannot also do later. The journal tap that records this
         // question's answer re-reads `LaunchAtLogin.isEnabled` afterwards
         // rather than trusting the click, for the same reason.
-        // An NSAlert takes its icon from `NSApp.applicationIconImage`, which
-        // this early in an accessory app's launch can still be empty: the
-        // v0.2.2-beta.1 gate run showed the dashed placeholder instead of
-        // the app icon. Asking the workspace for the bundle's own icon does
-        // not depend on that timing.
-        alert.icon = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-        // A menu-bar app is not active at launch, and an alert from an
-        // inactive app draws its default button grey, the same as the other
-        // one. Activating first is what makes "Launch at Login" read as the
-        // default it is.
+        // The icon file itself, not the workspace's idea of it. Both
+        // `NSApp.applicationIconImage` and `NSWorkspace.icon(forFile:)` go
+        // through Launch Services, which on a machine that has only just
+        // seen this bundle has not rendered its icon yet and hands back the
+        // dashed placeholder: both v0.2.2 gate runs showed exactly that,
+        // while the same call on a machine that has known the app for weeks
+        // draws it fine. The .icns in Resources does not depend on anyone's
+        // cache.
+        if let icon = Bundle.main.image(forResource: "AgentMenu") {
+            alert.icon = icon
+        }
+        // A menu-bar app is not active at launch, and an alert in an
+        // inactive app draws its default button grey, like the other one.
+        // Activating is what makes "Launch at Login" read as the default.
+        // `present` runs a turn after launch finished (see
+        // `presentIfNeeded`), when an activation request is honoured.
         NSApp.activate(ignoringOtherApps: true)
 
         if alert.runModal() == .alertFirstButtonReturn {
