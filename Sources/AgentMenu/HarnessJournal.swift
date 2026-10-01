@@ -54,6 +54,12 @@ final class HarnessJournal: @unchecked Sendable {
     @MainActor private var wasSetupNeeded: Bool?
     @MainActor private var wasFirstRunCompleted: Bool?
     @MainActor private var wasLaunchAtLoginAsked: Bool?
+    /// The last status seen for each live session, so the next list can be
+    /// told from it (`SessionJournalDiff`).
+    @MainActor private var sessionStatuses: [LiveSessionKey: SessionStatus] = [:]
+    /// The last badge count the status item reported drawing; nil until its
+    /// first reading, which is always recorded.
+    @MainActor private var lastBadgeCount: Int?
 
     private init() {}
 
@@ -145,6 +151,9 @@ final class HarnessJournal: @unchecked Sendable {
         // Absent until U7 resolves `AGENTMENU_PROFILE_ROOT`; a field that is
         // not there is a field a scenario cannot match on by accident.
         if let profileRoot { echo["profile_root"] = .string(profileRoot.path) }
+        // Where renames would be written, so a report can show a run never
+        // touched the maintainer's own store. Absent on an ordinary launch.
+        if let sessionStore = environment.overrides.sessionStore { echo["session_store"] = .string(sessionStore.path) }
         return echo
     }
 
@@ -204,6 +213,27 @@ final class HarnessJournal: @unchecked Sendable {
                     "folders": .list(setup.suggestedFolders.map(JournalValue.string)),
                     "folder_count": .integer(setup.suggestedFolders.count),
                 ])
+            }
+            .store(in: &observers)
+
+        // Sessions (KTD16). The model's list is the source, so a session that
+        // was already running at launch is seen too: `@Published` replays its
+        // current value, and the diff treats everything in it as new. Only
+        // this observer runs the diff, and it exists only while the journal
+        // is writing, so a normal launch does none of the work. The list is
+        // the sink's parameter, not `environment.sessions.live`, which still
+        // holds the previous value at this point.
+        environment.sessions.$live
+            .sink { [weak self] sessions in
+                guard let self else { return }
+                let diff = SessionJournalDiff.compare(previous: self.sessionStatuses, current: sessions)
+                self.sessionStatuses = diff.statuses
+                for session in diff.appeared {
+                    self.append(.sessionSeen, JournalData.sessionSeen(session))
+                }
+                for change in diff.changed {
+                    self.append(.sessionStatusChanged, JournalData.sessionStatusChanged(change.session, from: change.from))
+                }
             }
             .store(in: &observers)
 
@@ -306,6 +336,50 @@ final class HarnessJournal: @unchecked Sendable {
             data["error"] = .string((error as? LocalizedError)?.errorDescription ?? String(describing: error))
         }
         append(.launchResult, data)
+    }
+
+    /// AgentMenu asked its session host for a session (U11, KTD16), and
+    /// whether it got one. Names nothing the user typed: the launch is the
+    /// hash its Starting row's identifier carries, the terminal is a manifest
+    /// id.
+    func hostLaunch(launchID: String, terminal: String, ok: Bool) {
+        append(.hostLaunch, JournalData.hostLaunch(launchID: launchID, terminal: terminal, ok: ok))
+    }
+
+    /// How a history resume ended (KTD16): launched, or the reason it was not.
+    /// The outcome is a closed vocabulary and the session is named by the hash
+    /// its row's identifier carries, so nothing the user typed or any path
+    /// reaches the journal.
+    func restoreResult(sessionID: String, outcome: JournalData.RestoreOutcome) {
+        append(.restoreResult, JournalData.restoreResult(sessionID: sessionID, outcome: outcome))
+    }
+
+    /// A Reopen all finished (U14): counts only, so nothing the user typed or
+    /// any path reaches the journal. The per-session outcomes are
+    /// `restore result` events.
+    func reopenAll(total: Int, reopened: Int, failed: Int) {
+        append(.reopenAll, JournalData.reopenAll(total: total, reopened: reopened, failed: failed))
+    }
+
+    /// The Needs-you count the menu-bar item is drawing (R18), recorded when
+    /// it changes. Called by `StatusItemController.refreshIndicator` with the
+    /// count of the badge it actually built, 0 when it drew none, rather than
+    /// read off the model: the gap this closes is the item not showing what
+    /// the model holds. `refreshIndicator` runs on a timer too, so a repeat
+    /// of the last value is dropped here.
+    @MainActor
+    func badgeShown(count: Int) {
+        guard lastBadgeCount != count else { return }
+        lastBadgeCount = count
+        append(.badgeChanged, JournalData.badgeChanged(count: count))
+    }
+
+    /// How an attempt to bring a session's terminal forward ended (R8, R37).
+    /// The outcome is a closed vocabulary and the row is named by the hash
+    /// its identifier carries; `JournalData.focusResult` leaves out the
+    /// terminal's name and any script error text.
+    func focusResult(key: LiveSessionKey, outcome: FocusOutcome) {
+        append(.focusResult, JournalData.focusResult(key: key, outcome: outcome))
     }
 
     /// The one write into an agent's own configuration directory the app ever

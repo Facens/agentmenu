@@ -4,15 +4,18 @@
 import Foundation
 import AgentMenuKit
 
-/// `agentmenu install-statusline [--profile <id>] [--dry-run]` (R26, R47):
-/// the only command in the whole project that writes into an agent's
-/// configuration directory, and only when the user runs it. Writes the
+/// `agentmenu install-statusline [--profile <id>] [--dry-run] [--remove]`
+/// (R14, R26, R47): the only command in the whole project that writes into an
+/// agent's configuration directory, and only when the user runs it. Writes the
 /// bridge script and one key of `settings.json` — `statusLine` — chaining to
 /// whatever status-line command was already configured rather than
-/// replacing it.
+/// replacing it. `--remove` undoes exactly that: it puts `statusLine.command`
+/// back to the command the bridge chains to (or removes `statusLine` when
+/// there was none) and deletes the three files the bridge keeps.
 func runInstallStatusline(_ args: [String], configStore: ConfigStore) -> Int32 {
     var profileID: String?
     var dryRun = false
+    var remove = false
 
     var index = 0
     while index < args.count {
@@ -26,6 +29,8 @@ func runInstallStatusline(_ args: [String], configStore: ConfigStore) -> Int32 {
             profileID = args[index]
         case "--dry-run":
             dryRun = true
+        case "--remove":
+            remove = true
         default:
             fail("agentmenu install-statusline: unknown argument '\(args[index])'")
             return 2
@@ -58,6 +63,12 @@ func runInstallStatusline(_ args: [String], configStore: ConfigStore) -> Int32 {
     // R47: name the file and the key before writing anything.
     print("settings file: \(settingsURL.path)")
     print("key: statusLine.command")
+
+    if remove {
+        return runRemoval(
+            profileDirectory: profileDirectory, settingsURL: settingsURL, dryRun: dryRun
+        )
+    }
 
     let originalText: String
     if let existing = try? String(contentsOf: settingsURL, encoding: .utf8) {
@@ -144,6 +155,41 @@ func runInstallStatusline(_ args: [String], configStore: ConfigStore) -> Int32 {
     print("wrote \(scriptURL.path)")
     print("updated statusLine.command in \(settingsURL.path)")
     return 0
+}
+
+/// `install-statusline --remove`: names every file it will delete before
+/// deleting anything (R47), then reports what it did. A refusal — the status
+/// line was changed after install, say — exits 1 with nothing touched; there
+/// being nothing to remove exits 0.
+private func runRemoval(profileDirectory: URL, settingsURL: URL, dryRun: Bool) -> Int32 {
+    for name in StatuslineBridge.installedFilenames() {
+        print("file: \(profileDirectory.appendingPathComponent(name).path)")
+    }
+
+    switch StatuslineBridge.uninstall(
+        profileDirectory: profileDirectory, settingsURL: settingsURL, dryRun: dryRun
+    ) {
+    case .notInstalled:
+        print("the agentmenu bridge is not installed for this profile — nothing to remove")
+        return 0
+    case .refused(let reason), .failed(let reason):
+        fail("agentmenu install-statusline --remove: \(reason)")
+        return 1
+    case .removed(let restoredCommand, let deleted):
+        if let restoredCommand {
+            print("restoring statusLine.command to your original status line: \(restoredCommand)")
+        } else {
+            print("no status line was configured before the bridge — removing the statusLine key")
+        }
+        if dryRun {
+            for path in deleted { print("would delete \(path)") }
+            print("(dry run — nothing written)")
+            return 0
+        }
+        print("updated statusLine.command in \(settingsURL.path)")
+        for path in deleted { print("deleted \(path)") }
+        return 0
+    }
 }
 
 /// The `statusLine.command` a settings file currently holds, or nil when it

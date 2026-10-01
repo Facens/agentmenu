@@ -4,7 +4,7 @@ CONFIG  ?= release
 VERSION ?= 0.0.0-alpha
 DIST    ?= dist
 
-.PHONY: all build test bundle run icons clean
+.PHONY: all build test tmux bundle run icons clean
 
 all: build
 
@@ -27,7 +27,14 @@ test:
 icons:
 	$(SWIFT) packaging/icon/make-icons.swift
 
-bundle:
+# The tmux the app ships (R17, KTD2): built from pinned sources, static, with
+# jemalloc, cached under .build/tmux keyed by packaging/tmux/sources.sha256 and
+# build.sh. The first build takes a couple of minutes; a cache hit is
+# instant. `make clean` removes the cache with the rest of .build.
+tmux:
+	packaging/tmux/build.sh
+
+bundle: tmux
 	VERSION=$(VERSION) CONFIG=$(CONFIG) DIST=$(DIST) packaging/bundle.sh
 
 run: bundle

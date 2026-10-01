@@ -14,7 +14,8 @@
 # consistency: every Mach-O was signed by this pipeline (none is linker-signed),
 #   all of them carry the same team identifier (all ad-hoc, or all one team),
 #   every one requested the hardened runtime, and the Apple Events entitlement
-#   is on the app and never on the nested CLI. A fork pull request has no
+#   is on the app and never on the nested CLI or on anything in
+#   Contents/Helpers (the session host, U8). A fork pull request has no
 #   certificate, so this is what CI can honestly assert (R24).
 # authority: consistency, plus every Mach-O reports Developer ID authority, the
 #   expected team, a secure timestamp, and no ad-hoc flag (R6).
@@ -32,6 +33,7 @@ fi
 
 MAIN_EXECUTABLE="$APP/Contents/MacOS/$(defaults read "$(cd "$APP" && pwd)/Contents/Info.plist" CFBundleExecutable)"
 CLI="$APP/Contents/Resources/bin/agentmenu"
+HELPERS="$APP/Contents/Helpers"
 
 failures=0
 fail() { echo "  ✗ $1" >&2; failures=$((failures + 1)); }
@@ -105,6 +107,24 @@ if [ -f "$CLI" ]; then
     case "$cli_entitlements" in
         *"<key>"*) fail "nested CLI carries entitlements; it must carry none" ;;
     esac
+fi
+# The session host (tmux, under every name bundle.sh gives it) is nested code
+# that sends no Apple Events and runs the user's shells: it carries none
+# either, and a copy that did would hand the app's grant to a program that
+# runs arbitrary commands. Found by directory, so renaming a copy cannot dodge
+# it. Every Mach-O in Contents/Helpers is held to this; the signature checks
+# above already covered each of them.
+if [ -d "$HELPERS" ]; then
+    for path in "${machos[@]}"; do
+        case "$path" in
+            "$HELPERS"/*)
+                helper_entitlements="$(codesign -d --entitlements - --xml "$path" 2>/dev/null || true)"
+                case "$helper_entitlements" in
+                    *"<key>"*) fail "${path#"$APP"/}: helper carries entitlements; it must carry none" ;;
+                esac
+                ;;
+        esac
+    done
 fi
 
 # The seal itself: resources, including the signed CLI, match what the app's

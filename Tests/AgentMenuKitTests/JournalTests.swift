@@ -519,4 +519,146 @@ func runJournalTests(_ t: TestRunner) {
             }
         }
     })()
+
+    // MARK: - 17. Session events carry identity and status, never a title, a path or an argv (KTD16)
+
+    ({
+        let secretCwd = "/Users/someone/Documents/super-secret-project"
+        let secretConfig = "/Users/someone/.claude-secret"
+        let key = LiveSessionKey(configDirectory: secretConfig, pid: 4101, procStart: 1_790_000_000)
+        let session = LiveSession(
+            key: key,
+            agentID: "claude-code",
+            agentDisplayName: "Claude Code",
+            profileID: "work",
+            profileName: "Work Account Name",
+            configDirectory: URL(fileURLWithPath: secretConfig),
+            registryFile: URL(fileURLWithPath: secretConfig + "/sessions/4101.json"),
+            pid: 4101,
+            sessionId: "0b6f3a52-7c1e-4d0a-9a43-5f1e2c7d8b90",
+            cwd: secretCwd,
+            registryName: "rotate the secret keys",
+            status: .needsYou,
+            waitingFor: "permission prompt for rm -rf /secret",
+            tty: "/dev/ttys042",
+            startedAt: Date(timeIntervalSince1970: 1_790_000_000)
+        )
+
+        let seen = JournalData.sessionSeen(session)
+        let changed = JournalData.sessionStatusChanged(session, from: .working)
+        let restored = JournalData.restoreResult(
+            sessionID: "0b6f3a52-7c1e-4d0a-9a43-5f1e2c7d8b90", outcome: .failed
+        )
+
+        t.expectEqual(Set(seen.keys), ["key", "agent", "profile", "status"], "session seen carries exactly the hashed key, agent, profile and status")
+        t.expectEqual(Set(changed.keys), ["key", "agent", "profile", "from", "to"], "status changed carries the key, agent, profile and the two statuses")
+        t.expectEqual(Set(restored.keys), ["session", "outcome", "ok"], "restore result carries a hashed session, a closed outcome and a flag")
+        t.expectEqual(seen["key"], .string(AccessibilityID.Popover.Sessions.liveRowKey(key)), "the key is the row's accessibility hash, so a scenario can match them")
+        t.expectEqual(seen["status"], .string("needsYou"), "the status is its raw value")
+        t.expectEqual(changed["from"], .string("working"), "the previous status")
+        t.expectEqual(changed["to"], .string("needsYou"), "the new status")
+        t.expectEqual(restored["outcome"], .string("failed"), "a failed restore is recorded by outcome only")
+        t.expectEqual(restored["ok"], .boolean(false), "and is not ok")
+        t.expectEqual(JournalData.restoreResult(sessionID: "x", outcome: .launched)["ok"], .boolean(true), "a launch is ok")
+        let reopened = JournalData.reopenAll(total: 3, reopened: 2, failed: 1)
+        t.expectEqual(Set(reopened.keys), ["total", "reopened", "failed"], "a Reopen all summary carries counts and nothing else")
+        t.expectEqual(reopened["failed"], .integer(1), "the failed count")
+        t.expectEqual(JournalEvent.reopenAll.rawValue, "reopen all", "the event keeps its vocabulary name")
+
+        let unprofiled = LiveSession(
+            key: key, agentID: "codex", agentDisplayName: "Codex", pid: 4101, status: .unknown, startedAt: Date()
+        )
+        t.expect(JournalData.sessionSeen(unprofiled)["profile"] == nil, "a scanned agent has no profile to name")
+
+        let dir = TempDir("journal-sessions")
+        defer { dir.cleanup() }
+        let harness = dir.url.appendingPathComponent("harness")
+        guard let journal = t.attempt("opening a journal for session events", {
+            try Journal.open(directory: harness, name: "journal.ndjson", build: build)
+        }) else { return }
+        journal.append(.sessionSeen, seen)
+        journal.append(.sessionStatusChanged, changed)
+        journal.append(.restoreResult, restored)
+
+        let lines = journalLines(at: harness.appendingPathComponent("journal.ndjson"))
+        t.expectEqual(
+            lines.compactMap { $0["event"] as? String },
+            ["session seen", "session status changed", "restore result"],
+            "the three events keep the vocabulary's names"
+        )
+        let raw = (try? String(contentsOf: harness.appendingPathComponent("journal.ndjson"), encoding: .utf8)) ?? ""
+        for secret in [
+            "rotate the secret keys", "Work Account Name", "super-secret-project", secretCwd, secretConfig, "Users",
+            "/sessions/4101.json", "/dev/ttys042", "rm -rf", "permission prompt", "--model", "--resume",
+            "0b6f3a52-7c1e-4d0a-9a43-5f1e2c7d8b90",
+        ] {
+            t.expect(!raw.contains(secret), "no title, path, tty, argv or raw session id reaches the journal: '\(secret)'")
+        }
+        t.expect(raw.contains("\"work\""), "the profile id, which is the config's own stable id, is journalled")
+        t.expect(JournalEvent.allCases.count == Set(JournalEvent.allCases.map(\.rawValue)).count, "every event name is unique")
+    })()
+
+    // MARK: - 18. The badge and focus events carry a count and a closed outcome, never a tty, a path, a title or a script's error text
+
+    ({
+        let key = LiveSessionKey(configDirectory: "/Users/someone/.claude-secret", pid: 4102, procStart: 1_790_000_000)
+        let hashedKey = AccessibilityID.Popover.Sessions.liveRowKey(key)
+
+        t.expectEqual(JournalData.badgeChanged(count: 1), ["count": .integer(1)], "badge changed carries the count and nothing else")
+        t.expectEqual(JournalData.badgeChanged(count: 0), ["count": .integer(0)], "…including 0, when no badge is drawn")
+
+        let focused = JournalData.focusResult(key: key, outcome: .focused)
+        t.expectEqual(focused["outcome"], .string("focused"), "a focus that worked says so")
+        t.expectEqual(focused["ok"], .boolean(true), "and is ok")
+        t.expect(focused["reason"] == nil, "with no reason")
+        t.expectEqual(focused["key"], .string(hashedKey), "the row is named by its identifier's hash, so a scenario can match it to `session seen`")
+
+        let noTTY = JournalData.focusResult(key: key, outcome: .unavailable(.noTTY))
+        t.expectEqual(noTTY["outcome"], .string("unavailable"), "a row with no terminal is unavailable")
+        t.expectEqual(noTTY["reason"], .string("noTTY"), "…for that reason")
+        t.expectEqual(noTTY["ok"], .boolean(false), "and is not ok")
+        t.expectEqual(
+            JournalData.focusResult(key: key, outcome: .unavailable(.unrecognisedTerminal))["reason"],
+            .string("unrecognisedTerminal"), "an unrecognised terminal is named"
+        )
+        t.expectEqual(
+            JournalData.focusResult(key: key, outcome: .unavailable(.terminalCannotFocus(displayName: "Secret Term")))["reason"],
+            .string("terminalCannotFocus"), "a terminal with no focus script is named by reason, not by its own name"
+        )
+
+        let outcomes: [(FocusOutcome, String)] = [
+            (.notRunning(terminalName: "Secret Term"), "notRunning"),
+            (.windowGone(terminalName: "Secret Term"), "windowGone"),
+            (.automationDenied(terminalName: "Secret Term"), "automationDenied"),
+            (.failed(detail: "/Users/someone/secret.scpt: syntax error at /dev/ttys042"), "failed"),
+        ]
+        for (outcome, name) in outcomes {
+            let data = JournalData.focusResult(key: key, outcome: outcome)
+            t.expectEqual(data["outcome"], .string(name), "\(name) is recorded by its closed name")
+            t.expectEqual(Set(data.keys), ["key", "outcome", "ok"], "\(name) carries only the key, the outcome and the flag")
+        }
+        t.expectEqual(Set(noTTY.keys), ["key", "outcome", "reason", "ok"], "an unavailable focus adds only its reason")
+
+        let dir = TempDir("journal-focus")
+        defer { dir.cleanup() }
+        let harness = dir.url.appendingPathComponent("harness")
+        guard let journal = t.attempt("opening a journal for badge and focus events", {
+            try Journal.open(directory: harness, name: "journal.ndjson", build: build)
+        }) else { return }
+        journal.append(.badgeChanged, JournalData.badgeChanged(count: 1))
+        journal.append(.focusResult, noTTY)
+        for (outcome, _) in outcomes { journal.append(.focusResult, JournalData.focusResult(key: key, outcome: outcome)) }
+
+        let file = harness.appendingPathComponent("journal.ndjson")
+        let lines = journalLines(at: file)
+        t.expectEqual(
+            Array(lines.compactMap { $0["event"] as? String }.prefix(2)),
+            ["badge changed", "focus result"],
+            "the two events keep the vocabulary's names"
+        )
+        let raw = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        for secret in ["Secret Term", "secret.scpt", "syntax error", "/dev/ttys042", "/Users", "someone", ".claude-secret"] {
+            t.expect(!raw.contains(secret), "no terminal name, tty, path or script error reaches the journal: '\(secret)'")
+        }
+    })()
 }

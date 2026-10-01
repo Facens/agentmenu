@@ -117,6 +117,150 @@ func runConfigStoreTests(_ t: TestRunner) {
         }
     }
 
+    // MARK: 1d. `notifications_asked` (written only once true, like the
+    // launch-at-login flag) and `notify_needs_you` (ON by default, so only
+    // the exception is written) — R32, KTD15
+
+    do {
+        let dir = TempDir("configstore-notifications")
+        defer { dir.cleanup() }
+        let path = dir.path("config.toml")
+        let store = ConfigStore(url: URL(fileURLWithPath: path))
+
+        var config = Config()
+        t.expect(!config.notificationsAsked, "a fresh config has not asked macOS about notifications")
+        t.expect(config.notifyNeedsYou, "Needs-you notifications are on by default")
+
+        t.expectNoThrow("save a fresh config") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(!text.contains("notifications_asked"), "an unasked question leaves no trace in the file")
+            t.expect(!text.contains("notify_needs_you"), "the default leaves no trace in the file")
+        }
+        if let reloaded = t.attempt("reload the fresh config", { try store.load() }) {
+            t.expectEqual(reloaded?.notificationsAsked, false, "absent notifications_asked decodes to false")
+            t.expectEqual(reloaded?.notifyNeedsYou, true, "absent notify_needs_you decodes to on")
+        }
+
+        config.notificationsAsked = true
+        config.notifyNeedsYou = false
+        t.expectNoThrow("save with both set") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(text.contains("notifications_asked = true"), "asked is recorded as true")
+            t.expect(text.contains("notify_needs_you = false"), "the opt-out is recorded as false")
+        }
+        if let reloaded = t.attempt("reload with both set", { try store.load() }) {
+            t.expectEqual(reloaded, config, "both keys round-trip unchanged")
+        }
+
+        // Back on: the key goes again, so the file is what it was.
+        config.notifyNeedsYou = true
+        t.expectNoThrow("save with notifications back on") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(!text.contains("notify_needs_you"), "turning it back on removes the key")
+            t.expect(text.contains("notifications_asked = true"), "and leaves the asked flag alone")
+        }
+
+        // A hand-written file: `notifications_asked = true` alone, as a
+        // harness fixture plants it.
+        try? "schema = 1\nnotifications_asked = true\n".write(toFile: path, atomically: true, encoding: .utf8)
+        if let planted = t.attempt("load a planted config", { try store.load() }) {
+            t.expectEqual(planted?.notificationsAsked, true, "a planted notifications_asked = true is read")
+            t.expectEqual(planted?.notifyNeedsYou, true, "and the toggle is still on")
+        }
+    }
+
+    // MARK: 1e. `notify_your_turn` (R33, U11): ON by default like
+    // `notify_needs_you`, so only the exception is written.
+
+    do {
+        let dir = TempDir("configstore-yourturn")
+        defer { dir.cleanup() }
+        let path = dir.path("config.toml")
+        let store = ConfigStore(url: URL(fileURLWithPath: path))
+
+        var config = Config()
+        t.expect(config.notifyYourTurn, "Your-turn notifications are on by default")
+        t.expectNoThrow("save a fresh config") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(!text.contains("notify_your_turn"), "the default leaves no trace in the file")
+        }
+        if let reloaded = t.attempt("reload the fresh config", { try store.load() }) {
+            t.expectEqual(reloaded?.notifyYourTurn, true, "an absent key decodes to on")
+        }
+
+        config.notifyYourTurn = false
+        t.expectNoThrow("save with the toggle off") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(text.contains("notify_your_turn = false"), "the opt-out is recorded as false")
+            t.expect(!text.contains("notify_needs_you"), "and does not touch the Needs-you key")
+        }
+        if let reloaded = t.attempt("reload with the toggle off", { try store.load() }) {
+            t.expectEqual(reloaded?.notifyYourTurn, false, "the toggle round-trips off")
+            t.expectEqual(reloaded?.notifyNeedsYou, true, "independently of Needs you")
+        }
+
+        config.notifyYourTurn = true
+        t.expectNoThrow("save with it back on") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(!text.contains("notify_your_turn"), "turning it back on removes the key")
+        }
+    }
+
+    // MARK: 1f. `reopen_at_login_asked` and `reopen_at_login` (R25, U15): both
+    // default to false, so only `true` is ever written
+
+    do {
+        let dir = TempDir("configstore-reopen-at-login")
+        defer { dir.cleanup() }
+        let path = dir.path("config.toml")
+        let store = ConfigStore(url: URL(fileURLWithPath: path))
+
+        var config = Config()
+        t.expect(!config.reopenAtLoginAsked && !config.reopenAtLogin, "a fresh config has not asked, and the setting is off")
+        t.expectNoThrow("save a fresh config") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(!text.contains("reopen_at_login"), "neither default leaves a trace in the file")
+        }
+        if let reloaded = t.attempt("reload the fresh config", { try store.load() }) {
+            t.expectEqual(reloaded?.reopenAtLoginAsked, false, "an absent reopen_at_login_asked reads as false")
+            t.expectEqual(reloaded?.reopenAtLogin, false, "an absent reopen_at_login reads as off")
+        }
+
+        // Answered no: asked, still off.
+        config.reopenAtLoginAsked = true
+        t.expectNoThrow("save after a no") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(text.contains("reopen_at_login_asked = true"), "the answer is recorded")
+            t.expect(!text.contains("reopen_at_login ="), "and a setting that is off is not written")
+        }
+
+        // Answered yes: both.
+        config.reopenAtLogin = true
+        t.expectNoThrow("save after a yes") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(text.contains("reopen_at_login_asked = true"), "asked stays recorded")
+            t.expect(text.contains("reopen_at_login = true"), "the setting is recorded as true")
+        }
+        if let reloaded = t.attempt("reload after a yes", { try store.load() }) {
+            t.expectEqual(reloaded, config, "both keys round-trip unchanged")
+        }
+
+        // Turned back off in Settings: the setting goes, the answer stays.
+        config.reopenAtLogin = false
+        t.expectNoThrow("save with the setting off again") { try store.save(config) }
+        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+            t.expect(!text.contains("reopen_at_login ="), "turning it off removes the key")
+            t.expect(text.contains("reopen_at_login_asked = true"), "and leaves the asked flag alone")
+        }
+
+        // A hand-written file with both.
+        try? "schema = 1\nreopen_at_login_asked = true\nreopen_at_login = true\n".write(toFile: path, atomically: true, encoding: .utf8)
+        if let planted = t.attempt("load a planted config", { try store.load() }) {
+            t.expectEqual(planted?.reopenAtLoginAsked, true, "a planted reopen_at_login_asked = true is read")
+            t.expectEqual(planted?.reopenAtLogin, true, "and so is a planted reopen_at_login = true")
+        }
+    }
+
     // MARK: 2. Folder preset: model set, effort absent stays absent
 
     do {
@@ -361,6 +505,77 @@ func runConfigStoreTests(_ t: TestRunner) {
         // And check the raw text: "off" writes back as the bare string "off".
         if let text = try? String(contentsOf: URL(fileURLWithPath: dir.path("config.toml")), encoding: .utf8) {
             t.expect(text.contains(#"advisor = "off""#), "off advisor is written back as the literal string \"off\"")
+        }
+    }
+
+    // MARK: 7b. keep_running (R15): false in defaults and in a folder round-trips; absent stays absent
+
+    do {
+        let dir = TempDir("configstore-keeprunning")
+        defer { dir.cleanup() }
+        let url = URL(fileURLWithPath: dir.path("config.toml"))
+        let store = ConfigStore(url: url)
+
+        var config = Config()
+        config.defaults = Preset(agent: "claude-code", keepRunning: false)
+        config.folders = [
+            FolderTarget(label: "InheritsKeep", path: "/tmp/keep-inherit"),
+            FolderTarget(label: "OffKeep", path: "/tmp/keep-off", preset: Preset(keepRunning: false)),
+            FolderTarget(label: "OnKeep", path: "/tmp/keep-on", preset: Preset(keepRunning: true)),
+        ]
+
+        t.expectNoThrow("save keep_running scenarios") { try store.save(config) }
+        if let reloaded = t.attempt("reload keep_running scenarios", { try store.load() }) {
+            t.expectEqual(reloaded?.defaults.keepRunning, false, "keep_running = false in [defaults] round-trips")
+            let byLabel = Dictionary(uniqueKeysWithValues: (reloaded?.folders ?? []).map { ($0.label, $0) })
+            t.expectEqual(byLabel["InheritsKeep"]?.preset.keepRunning, nil, "a folder with no keep_running key stays absent")
+            t.expectEqual(byLabel["OffKeep"]?.preset.keepRunning, false, "keep_running = false in a folder round-trips")
+            t.expectEqual(byLabel["OnKeep"]?.preset.keepRunning, true, "keep_running = true in a folder round-trips")
+        }
+        if let text = try? String(contentsOf: url, encoding: .utf8) {
+            t.expect(text.contains("keep_running = false"), "false is written as a TOML boolean, not a string")
+            t.expect(!text.contains(#"keep_running = "false""#), "and never quoted")
+            t.expectEqual(text.components(separatedBy: "keep_running").count - 1, 3, "exactly the three set values are written — the inheriting folder gets no key")
+        }
+    }
+
+    do {
+        // An existing install: written before the field existed. Loading it
+        // must not invent a value, and saving it must not write one.
+        let dir = TempDir("configstore-keeprunning-absent")
+        defer { dir.cleanup() }
+        let url = URL(fileURLWithPath: dir.path("config.toml"))
+        let original = """
+        schema = 1
+        active_profile = "work"
+        first_run_completed = true
+
+        [defaults]
+        agent = "claude-code"
+        terminal = "terminal-app"
+
+        [[profiles]]
+        id = "work"
+        name = "Work"
+        config_dir = "~/.claude-work"
+
+        [[folders]]
+        id = "proj"
+        label = "Project"
+        path = "/tmp/keep-existing"
+        model = "opus"
+
+        """
+        try? original.write(to: url, atomically: true, encoding: .utf8)
+        let store = ConfigStore(url: url)
+
+        if let loaded = t.attempt("load a config that predates keep_running", { try store.load() }), let config = loaded {
+            t.expectEqual(config.defaults.keepRunning, nil, "an existing [defaults] loads with keep_running absent — inherit, not off")
+            t.expectEqual(config.folders.first?.preset.keepRunning, nil, "an existing folder loads with keep_running absent")
+            t.expectEqual(config.defaults.terminal, "terminal-app", "the rest of the existing config loads as before")
+            t.expectNoThrow("save the loaded config back") { try store.save(config) }
+            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+            t.expect(!text.contains("keep_running"), "saving does not materialise a keep_running key")
         }
     }
 

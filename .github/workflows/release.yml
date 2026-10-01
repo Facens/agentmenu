@@ -82,6 +82,15 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
+      # U8 / R17: the tmux the app ships, from pinned sources. A tag always
+      # builds it cold (about two and a half minutes) and takes no cache: what
+      # a cache hit proves is the binary's properties, not that it came from
+      # the pinned sources, and the release is the build users install. `make
+      # tmux` verifies the checksums of the source archives, then the binary
+      # itself (arm64, macOS 14.0 or lower, system libraries only, jemalloc).
+      - name: Build tmux
+        run: make tmux
+
       # A tag is the one build users actually install, so it runs the suite
       # rather than trusting that CI ran on the commit it points at.
       - name: Test
@@ -148,6 +157,16 @@ jobs:
           test -x dist/AgentMenu.app/Contents/Resources/bin/agentmenu
           test -f dist/AgentMenu.app/Contents/Info.plist
           test -d dist/AgentMenu.app/Contents/Resources/agents
+          # U8: the session host is in the bundle, under at least one name,
+          # every copy runs, and each is arm64 like the app (R30). The names
+          # come from bundle.sh, not from here.
+          helpers=0
+          for helper in dist/AgentMenu.app/Contents/Helpers/*; do
+            helpers=$((helpers + 1))
+            "$helper" -V | grep -qE '^tmux [0-9]'
+            test "$(lipo -archs "$helper")" = arm64
+          done
+          test "$helpers" -ge 1
           # R30: the release notes say Apple Silicon only; make that true by
           # assertion rather than by which runner happened to build it.
           test "$(file -b dist/AgentMenu.app/Contents/MacOS/AgentMenu)" = 'Mach-O 64-bit executable arm64'

@@ -76,6 +76,7 @@ func runAccessibilityIDTests(_ t: TestRunner) {
         AccessibilityID.Popover.overrideEffort(rowKey: rowKeyA),
         AccessibilityID.Popover.overridePermission(rowKey: rowKeyA),
         AccessibilityID.Popover.overrideAdvisor(rowKey: rowKeyA),
+        AccessibilityID.Popover.overrideKeepRunning(rowKey: rowKeyA),
         AccessibilityID.Popover.overrideAgent(rowKey: rowKeyA),
         AccessibilityID.Popover.overrideLaunch(rowKey: rowKeyA),
         AccessibilityID.Popover.overrideTerminal(rowKey: rowKeyA),
@@ -90,22 +91,30 @@ func runAccessibilityIDTests(_ t: TestRunner) {
         AccessibilityID.Settings.tab("defaults"),
         AccessibilityID.Settings.tab("accounts"),
         AccessibilityID.Settings.tab("agents"),
+        AccessibilityID.Settings.launchAtLogin,
+        AccessibilityID.Settings.reopenAtLogin,
+        AccessibilityID.Settings.notifyNeedsYou,
+        AccessibilityID.Settings.notifyYourTurn,
+        AccessibilityID.Settings.notificationsDenied,
         AccessibilityID.Settings.preset("defaults", "model"),
         AccessibilityID.Settings.preset("defaults", "effort"),
         AccessibilityID.Settings.preset("defaults", "permission"),
         AccessibilityID.Settings.preset("defaults", "advisor"),
+        AccessibilityID.Settings.preset("defaults", "keepRunning"),
         AccessibilityID.Settings.preset("defaults", "agent"),
         AccessibilityID.Settings.preset("defaults", "terminal"),
         AccessibilityID.Settings.preset("folders.preset", "model"),
         AccessibilityID.Settings.preset("folders.preset", "effort"),
         AccessibilityID.Settings.preset("folders.preset", "permission"),
         AccessibilityID.Settings.preset("folders.preset", "advisor"),
+        AccessibilityID.Settings.preset("folders.preset", "keepRunning"),
         AccessibilityID.Settings.preset("folders.preset", "agent"),
         AccessibilityID.Settings.Accounts.add,
         AccessibilityID.Settings.Accounts.remove,
         AccessibilityID.Settings.Accounts.chooseDirectory,
         AccessibilityID.Settings.Accounts.name,
         AccessibilityID.Settings.Accounts.installBridge,
+        AccessibilityID.Settings.Accounts.removeBridge,
         AccessibilityID.Settings.Agents.path(agentA),
         AccessibilityID.Settings.Agents.path(agentB),
         AccessibilityID.Settings.Agents.find(agentA),
@@ -128,7 +137,19 @@ func runAccessibilityIDTests(_ t: TestRunner) {
         // Launch-at-login prompt
         AccessibilityID.LaunchAtLoginPrompt.accept,
         AccessibilityID.LaunchAtLoginPrompt.decline,
-    ]
+        AccessibilityID.QuitPrompt.confirm,
+        AccessibilityID.QuitPrompt.cancel,
+    ] + sessionsRepresentative(
+        liveKeys: [
+            LiveSessionKey(configDirectory: "/Users/andrea/.claude", pid: 4101, procStart: 1_790_000_000),
+            LiveSessionKey(configDirectory: "/Users/andrea/.claude-work", pid: 4101, procStart: 1_790_000_000),
+            LiveSessionKey(configDirectory: "/Users/andrea/.claude", pid: 4101, procStart: 1_790_000_999),
+            LiveSessionKey(configDirectory: nil, pid: 4101, procStart: 1_790_000_000),
+        ],
+        closedSessionIDs: ["0b6f3a52-7c1e-4d0a-9a43-5f1e2c7d8b90", "5d2c9e14-31aa-4b7e-8c60-9a1f3b2d4e77"],
+        foldIDs: ["collect-invoices\u{0}/Users/andrea/Code/agentmenu", "collect-invoices\u{0}/Users/andrea/Code/meetinghop"],
+        profileIDs: [profileA, profileB, "all"]
+    )
 
     for id in representative {
         t.expect(!id.isEmpty, "identifier is non-empty: '\(id)'")
@@ -217,6 +238,58 @@ func runAccessibilityIDTests(_ t: TestRunner) {
         ("Settings.Folders.row", AccessibilityID.Settings.Folders.row(folderID: maintainerPath)),
     ]
 
+    // KTD16: the Sessions identifiers hash their row key and never carry a
+    // title or a path. The fixtures below put a secret in every field a row
+    // could be built from.
+    let secretFolder = "/Users/andrea.giannangelo/Documents/super-secret-project"
+    let secretSkill = "collect-secret-invoices"
+    let secretKey = LiveSessionKey(configDirectory: "/Users/andrea.giannangelo/.claude-secret", pid: 77, procStart: 1_790_000_000)
+    let secretFold = "\(secretSkill)\u{0}\(secretFolder)"
+    let sessionsIdentifiers: [(String, String)] = [
+        ("Sessions.liveRow", AccessibilityID.Popover.Sessions.liveRow(secretKey)),
+        ("Sessions.liveRowMenu", AccessibilityID.Popover.Sessions.liveRowMenu(secretKey)),
+        ("Sessions.liveRowQuit", AccessibilityID.Popover.Sessions.liveRowQuit(secretKey)),
+        ("Sessions.closedRow", AccessibilityID.Popover.Sessions.closedRow(sessionID: secretFolder)),
+        ("Sessions.closedRowMenu", AccessibilityID.Popover.Sessions.closedRowMenu(sessionID: secretFolder)),
+        ("Sessions.foldRow", AccessibilityID.Popover.Sessions.foldRow(foldID: secretFold)),
+        ("Sessions.liveRowRename", AccessibilityID.Popover.Sessions.liveRowRename(secretKey)),
+        ("Sessions.closedRowRename", AccessibilityID.Popover.Sessions.closedRowRename(sessionID: secretFolder)),
+        ("Sessions.closedRowPendingTag", AccessibilityID.Popover.Sessions.closedRowPendingTag(sessionID: secretFolder)),
+        ("Sessions.pendingRow", AccessibilityID.Popover.Sessions.pendingRow(launchID: secretFolder)),
+        ("Sessions.pendingQuit", AccessibilityID.Popover.Sessions.pendingQuit(launchID: secretFolder)),
+        ("Sessions.pendingRetry", AccessibilityID.Popover.Sessions.pendingRetry(launchID: secretFolder)),
+        ("Sessions.pendingDismiss", AccessibilityID.Popover.Sessions.pendingDismiss(launchID: secretFolder)),
+        // A fixed identifier, so nothing a user typed can be in it; listed so
+        // a later change that keys it by folder name trips the same sweep.
+        ("Sessions.needsYouHeader", AccessibilityID.Popover.Sessions.needsYouHeader),
+    ]
+    for (label, id) in sessionsIdentifiers {
+        for fragment in [usernameFragment, projectFragment, secretSkill, "secret", "Users", ".claude", secretFolder] {
+            t.expect(!id.localizedCaseInsensitiveContains(fragment), "\(label) does not embed '\(fragment)' — got '\(id)'")
+        }
+        t.expect(!id.contains("\u{0}"), "\(label) carries no control character — got '\(id)'")
+    }
+    t.expectEqual(
+        AccessibilityID.Popover.Sessions.liveRow(secretKey), AccessibilityID.Popover.Sessions.liveRow(secretKey),
+        "a live row's identifier is deterministic, so a scenario can predict it"
+    )
+    t.expectEqual(
+        AccessibilityID.Popover.Sessions.liveRowKey(secretKey).count, 12,
+        "a live row key is the same 12-character hash every other row key is"
+    )
+    t.expect(
+        AccessibilityID.Popover.Sessions.liveRow(secretKey) != AccessibilityID.Popover.Sessions.liveRowMenu(secretKey),
+        "a live row and its menu carry different identifiers"
+    )
+    t.expect(
+        AccessibilityID.Popover.Sessions.closedRowKey(sessionID: "abc") != AccessibilityID.Popover.Sessions.foldRowKey(foldID: "abc"),
+        "a closed row and a fold with the same raw id still hash apart"
+    )
+    t.expect(
+        AccessibilityID.Popover.Sessions.pill(.all) != AccessibilityID.Popover.Sessions.pill(.profile("all")),
+        "the All pill and a profile that happens to be called all do not collide"
+    )
+
     for (label, id) in dynamicIdentifiers {
         t.expect(!id.contains(maintainerPath), "\(label) does not embed the raw path — got '\(id)'")
         t.expect(!id.localizedCaseInsensitiveContains(usernameFragment), "\(label) does not embed the username — got '\(id)'")
@@ -234,4 +307,58 @@ func runAccessibilityIDTests(_ t: TestRunner) {
         AccessibilityID.Setup.agentToggle(agentA).contains(agentA),
         "an agent id is carried verbatim, not hashed — it is not user-supplied free text"
     )
+}
+
+/// The Sessions tab's identifiers over a representative set of keys, for the
+/// uniqueness sweep: every fixed one once, and every keyed one for each key.
+private func sessionsRepresentative(
+    liveKeys: [LiveSessionKey], closedSessionIDs: [String], foldIDs: [String], profileIDs: [String]
+) -> [String] {
+    typealias Sessions = AccessibilityID.Popover.Sessions
+    var ids: [String] = [
+        AccessibilityID.Popover.tabLaunch,
+        AccessibilityID.Popover.tabSessions,
+        Sessions.toggleLive,
+        Sessions.toggleClosed,
+        Sessions.pill(.all),
+        Sessions.needsYouHeader,
+        Sessions.headerMenu,
+        Sessions.quitAll,
+        Sessions.reopenAll,
+        Sessions.reopenLastClosed,
+        Sessions.closedSearch,
+        Sessions.emptyLive,
+        Sessions.emptyNoMatches,
+        Sessions.closedIndexing,
+        Sessions.reopenStrip,
+        Sessions.reopenStripDismiss,
+        Sessions.reopenProgress,
+        Sessions.notificationsDenied,
+        // U14: the banner above the tabs and its two controls.
+        AccessibilityID.Popover.restoreBanner,
+        AccessibilityID.Popover.restoreBannerReopenAll,
+        AccessibilityID.Popover.restoreBannerDismiss,
+        AccessibilityID.Popover.restoreBannerQuestion,
+        AccessibilityID.Popover.restoreBannerReopenAtLogin,
+        AccessibilityID.Popover.restoreBannerNotAtLogin,
+    ]
+    ids += profileIDs.map { Sessions.pill(.profile($0)) }
+    for key in liveKeys {
+        ids.append(Sessions.liveRow(key))
+        ids.append(Sessions.liveRowMenu(key))
+        ids.append(Sessions.liveRowQuit(key))
+        ids.append(Sessions.liveRowRename(key))
+    }
+    for id in closedSessionIDs {
+        ids.append(Sessions.closedRow(sessionID: id))
+        ids.append(Sessions.closedRowMenu(sessionID: id))
+        ids.append(Sessions.closedRowRename(sessionID: id))
+        ids.append(Sessions.closedRowPendingTag(sessionID: id))
+        ids.append(Sessions.pendingRow(launchID: id))
+        ids.append(Sessions.pendingQuit(launchID: id))
+        ids.append(Sessions.pendingRetry(launchID: id))
+        ids.append(Sessions.pendingDismiss(launchID: id))
+    }
+    ids += foldIDs.map { Sessions.foldRow(foldID: $0) }
+    return ids
 }

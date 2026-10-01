@@ -65,11 +65,18 @@ contribution path and needs nothing from you.
 - Keep `AgentMenuKit` free of UI: it holds configuration, manifests, preset
   resolution, command construction and the snapshot reader, and it is where
   tests live. The app target is verified by running it.
-- The app **never writes to an agent's configuration directory**. The single
-  exception is the status-line bridge install, which the user runs
-  deliberately from Settings → Accounts and which names the file and the key
-  it changes before writing. A pull request that adds another write there
-  will not be merged.
+- The app **writes into an agent's configuration only what it names, only when
+  the user asks, and removes it on request.** The one write today is the
+  status-line bridge: `agentmenu-statusline.sh`, the `statusLine.command` key
+  of `settings.json`, and the snapshot and history files the script keeps
+  (`tb-rate-snapshot.json`, `tb-rate-history.jsonl`). The user installs it
+  deliberately from Settings → Accounts, and the dialog names the file and the
+  key before writing; Remove, in the same place, deletes the three files and
+  restores `statusLine.command` (or removes the key if there was none). Sessions are read, never written: the session registry
+  and transcripts under an agent's configuration directory are opened
+  read-only. A pull request that adds another write there, or writes to
+  either, will not be merged unless it states what it adds, asks the user
+  first and can be undone, and the README says so in the same change.
 - Every Swift file under `Sources/` and `Tests/` starts with a two-line header:
   `// Copyright (c) 2026 Andrea Giannangelo` followed by
   `// SPDX-License-Identifier: GPL-3.0-or-later`. CI checks for exactly one

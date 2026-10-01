@@ -13,9 +13,12 @@
 # came up in that directory. The harness exercises that same path on every
 # run (harness/scenarios/agentmenu/launch-terminal.sh).
 #
-# Behaviour is what `do script` documents and nothing more: the command runs
-# in a new window, or in the front window's active tab if one is already
-# open.
+# Behaviour is what `do script` documents with no target: the command always
+# runs in a NEW window. It never names a window. An earlier version typed into
+# window 1's active tab whenever Terminal already had a window, which is wrong
+# once AgentMenu hosts sessions itself: the text would land in whatever is
+# running there, a live session included. Plain launches get their own window
+# for the same reason.
 schema = 1
 id = "terminal-app"
 display_name = "Terminal"
@@ -28,11 +31,58 @@ on run argv
   set cmd to item 1 of argv
   tell application "Terminal"
     activate
-    if (count of windows) = 0 then
-      do script cmd
-    else
-      do script cmd in window 1
-    end if
+    do script cmd
   end tell
 end run
+"""
+
+# Focus (optional). Takes the session's tty as argument 1, always in the form
+# `/dev/ttysNNN` — the form Terminal's own `tty` property reports. One bulk
+# query reads every tab's tty (an Apple Event per tab is what makes a naive
+# loop slow), then the match is selected, its window raised out of the Dock if
+# it was minimised, and Terminal activated, which is what moves macOS to the
+# window's Space. Answers `focused`, or `not found` when no tab has that tty.
+# AgentMenu checks Terminal is running before it runs this: a `tell` to an
+# app that is not running launches it.
+focus_applescript = """
+on run argv
+  set target to item 1 of argv
+  tell application "Terminal"
+    set ttyLists to tty of every tab of every window
+    if ttyLists is {} then return "not found"
+    -- One window can answer a flat list; make it a list of lists either way.
+    if class of item 1 of ttyLists is not list then set ttyLists to {ttyLists}
+    repeat with w from 1 to count of ttyLists
+      set tabTTYs to item w of ttyLists
+      repeat with t from 1 to count of tabTTYs
+        if (item t of tabTTYs) is target then
+          set theWindow to window w
+          set selected tab of theWindow to tab t of theWindow
+          try
+            if miniaturized of theWindow then set miniaturized of theWindow to false
+          end try
+          set index of theWindow to 1
+          activate
+          return "focused"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "not found"
+end run
+"""
+
+# Frontmost tab (optional). Answers the tty of the tab the user is looking at
+# right now, in the same `/dev/ttysNNN` form the focus script takes, or an empty
+# string when Terminal has no window. AgentMenu runs it once, when a Needs-you
+# hold-down expires and Terminal is the frontmost app, so a notification is not
+# posted for the prompt already on screen; it never runs while Terminal is in
+# the background (and so never launches it). Without this key, or without an
+# Automation grant, a session here counts as not frontmost and the notification
+# posts.
+frontmost_tty_applescript = """
+tell application "Terminal"
+  if (count of windows) = 0 then return ""
+  return tty of selected tab of front window
+end tell
 """

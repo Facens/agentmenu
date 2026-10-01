@@ -4,8 +4,10 @@
 import SwiftUI
 import AgentMenuKit
 
-/// The General tab: whether this copy starts with the Mac, and what it does
-/// about its own updates (U11 / R13).
+/// The General tab: whether this copy starts with the Mac and brings its
+/// sessions back after a restart (R25), whether it tells
+/// you when a session needs you (R32), and what it does about its own
+/// updates (U11 / R13).
 ///
 /// Two toggles that look alike and are stored in two different places, on
 /// purpose. Automatic checking is Sparkle's own preference, read and written
@@ -22,6 +24,26 @@ struct GeneralPane: View {
             Section {
                 Toggle("Launch at login", isOn: $model.launchAtLogin)
                     .accessibilityIdentifier(AccessibilityID.Settings.launchAtLogin)
+                Toggle("Reopen sessions at login", isOn: $model.reopenAtLogin)
+                    .accessibilityIdentifier(AccessibilityID.Settings.reopenAtLogin)
+                    .help("After a restart, AgentMenu reopens the sessions that were running, without waiting for a click. A session host that crashed is never reopened this way.")
+            }
+
+            Section("Notifications") {
+                Toggle("Notify when a session needs you", isOn: $model.notifyNeedsYou)
+                    .accessibilityIdentifier(AccessibilityID.Settings.notifyNeedsYou)
+                Toggle("Notify when a session I launched finishes its turn", isOn: $model.notifyYourTurn)
+                    .accessibilityIdentifier(AccessibilityID.Settings.notifyYourTurn)
+                    .help("Only for sessions AgentMenu launched, and only after a turn of at least 30 seconds.")
+                if let guidance = model.notificationsGuidance {
+                    // Next to the toggle, so it never reads as working when
+                    // macOS will not let it.
+                    Text(guidance)
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(AccessibilityID.Settings.notificationsDenied)
+                }
             }
 
             Section("Updates") {
@@ -61,5 +83,6 @@ struct GeneralPane: View {
         }
         .formStyle(.grouped)
         .padding(.vertical, 8)
+        .onAppear { model.refreshNotificationAuthorization() }
     }
 }

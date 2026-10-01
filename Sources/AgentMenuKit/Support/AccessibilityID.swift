@@ -84,6 +84,17 @@ public enum AccessibilityID {
         /// unlike Sparkle's own window, which carries no identifiers of ours.
         public static let checkForUpdates = "popover.checkForUpdates"
         public static let translocationBanner = "popover.translocationBanner"
+        /// U14: the banner above the tabs that offers Reopen all after a restart,
+        /// a crash or a host that died, and its two controls. Fixed: the text
+        /// names a count, never a session.
+        public static let restoreBanner = "popover.restoreBanner"
+        public static let restoreBannerReopenAll = "popover.restoreBanner.reopenAll"
+        public static let restoreBannerDismiss = "popover.restoreBanner.dismiss"
+        /// U15: the once-only "reopen sessions at login?" question inside the
+        /// banner, and its two answers.
+        public static let restoreBannerQuestion = "popover.restoreBanner.reopenAtLoginQuestion"
+        public static let restoreBannerReopenAtLogin = "popover.restoreBanner.reopenAtLogin.yes"
+        public static let restoreBannerNotAtLogin = "popover.restoreBanner.reopenAtLogin.no"
         /// The menu-bar button that opens and closes the popover.
         public static let statusItem = "popover.statusItem"
         /// The popover's own hosting content view — what makes it a
@@ -123,6 +134,7 @@ public enum AccessibilityID {
         public static func overrideEffort(rowKey: String) -> String { "popover.row.\(rowKey).override.effort" }
         public static func overridePermission(rowKey: String) -> String { "popover.row.\(rowKey).override.permission" }
         public static func overrideAdvisor(rowKey: String) -> String { "popover.row.\(rowKey).override.advisor" }
+        public static func overrideKeepRunning(rowKey: String) -> String { "popover.row.\(rowKey).override.keepRunning" }
         public static func overrideAgent(rowKey: String) -> String { "popover.row.\(rowKey).override.agent" }
         public static func overrideLaunch(rowKey: String) -> String { "popover.row.\(rowKey).override.launch" }
         public static func overrideTerminal(rowKey: String) -> String { "popover.row.\(rowKey).override.terminal" }
@@ -136,6 +148,107 @@ public enum AccessibilityID {
         /// `kind` is `"fiveHour"` or `"sevenDay"`, never a value read off the
         /// snapshot itself.
         public static func usageWindow(_ kind: String) -> String { "popover.usage.\(kind)" }
+
+        /// The popover's two tabs (KTD16). Launch is selected on every open.
+        public static let tabLaunch = "popover.tab.launch"
+        public static let tabSessions = "popover.tab.sessions"
+
+        /// The Sessions tab (`SessionsView.swift`, `SessionRow.swift`).
+        ///
+        /// KTD16: a session identifier hashes its row key and never contains a
+        /// title or a path. A live row is keyed by `LiveSessionKey` — never by
+        /// session id, for the reason that type documents — a closed row by its
+        /// session id, a fold by its own id (a skill name and a folder). All
+        /// three go through `pathHash`, so a scenario predicts an identifier
+        /// from the key it launched and nothing the user typed can leak into
+        /// the accessibility tree.
+        public enum Sessions {
+            /// The Live | Closed toggle.
+            public static let toggleLive = "popover.sessions.toggle.live"
+            public static let toggleClosed = "popover.sessions.toggle.closed"
+
+            /// An account pill. A profile id is the config's own stable id
+            /// (KTD9's exception) and is carried verbatim; `all` and
+            /// `profile.all` cannot collide.
+            public static func pill(_ pill: AccountPill) -> String {
+                switch pill {
+                case .all: return "popover.sessions.pill.all"
+                case .profile(let id): return "popover.sessions.pill.profile.\(id)"
+                }
+            }
+
+            /// The hashed key a live row is addressed by, and the value the
+            /// journal's session events carry as `key`, so a scenario can
+            /// match a row to its events. Built from the registry directory,
+            /// pid and process start — the row's own identity (KTD7).
+            public static func liveRowKey(_ key: LiveSessionKey) -> String {
+                pathHash("live:\(key.configDirectory ?? "-")|\(key.pid)|\(key.procStart)")
+            }
+
+            public static func liveRow(_ key: LiveSessionKey) -> String { "popover.sessions.live.\(liveRowKey(key)).row" }
+            public static func liveRowMenu(_ key: LiveSessionKey) -> String { "popover.sessions.live.\(liveRowKey(key)).menu" }
+            /// Quit, in a live row's menu (U12).
+            public static func liveRowQuit(_ key: LiveSessionKey) -> String { "popover.sessions.live.\(liveRowKey(key)).quit" }
+
+            public static func closedRowKey(sessionID: String) -> String { pathHash("closed:\(sessionID)") }
+            public static func closedRow(sessionID: String) -> String { "popover.sessions.closed.\(closedRowKey(sessionID: sessionID)).row" }
+            public static func closedRowMenu(sessionID: String) -> String { "popover.sessions.closed.\(closedRowKey(sessionID: sessionID)).menu" }
+            /// The small tag on a Closed row that Reopen all would bring back (U14).
+            public static func closedRowPendingTag(sessionID: String) -> String { "popover.sessions.closed.\(closedRowKey(sessionID: sessionID)).reopenAllTag" }
+
+            /// A folded run of one skill in one folder, by the fold's own id
+            /// (`SkillFold.id`), which carries both.
+            public static func foldRowKey(foldID: String) -> String { pathHash("fold:\(foldID)") }
+            public static func foldRow(foldID: String) -> String { "popover.sessions.fold.\(foldRowKey(foldID: foldID)).row" }
+
+            /// The Needs-you group's heading on the Live list. Only this group
+            /// has one: every other group is a folder, and a folder's name is
+            /// a path, which an identifier never carries (KTD16). A scenario
+            /// waits for it to know a waiting session is listed where the
+            /// user looks for it, not merely somewhere in the list.
+            public static let needsYouHeader = "popover.sessions.group.needsYou"
+
+            /// The header menu, visible on Live and Closed with or without
+            /// rows, and its three items.
+            public static let headerMenu = "popover.sessions.header.menu"
+            public static let quitAll = "popover.sessions.header.quitAll"
+            public static let reopenAll = "popover.sessions.header.reopenAll"
+            public static let reopenLastClosed = "popover.sessions.header.reopenLastClosed"
+
+            /// The inline rename field a row shows while it is being renamed.
+            public static func liveRowRename(_ key: LiveSessionKey) -> String { "popover.sessions.live.\(liveRowKey(key)).rename" }
+            public static func closedRowRename(sessionID: String) -> String { "popover.sessions.closed.\(closedRowKey(sessionID: sessionID)).rename" }
+
+            /// A launch that has no live row yet (Starting) or never got one
+            /// (Failed to start), by the launch's own id. Nothing creates one
+            /// before owned launches exist; the view and its identifiers are
+            /// ready for them.
+            public static func pendingRowKey(launchID: String) -> String { pathHash("pending:\(launchID)") }
+            public static func pendingRow(launchID: String) -> String { "popover.sessions.pending.\(pendingRowKey(launchID: launchID)).row" }
+            public static func pendingQuit(launchID: String) -> String { "popover.sessions.pending.\(pendingRowKey(launchID: launchID)).quit" }
+            public static func pendingRetry(launchID: String) -> String { "popover.sessions.pending.\(pendingRowKey(launchID: launchID)).retry" }
+            public static func pendingDismiss(launchID: String) -> String { "popover.sessions.pending.\(pendingRowKey(launchID: launchID)).dismiss" }
+
+            /// The strip a Reopen all leaves at the top of the list, and its
+            /// dismiss control.
+            public static let reopenStrip = "popover.sessions.reopenStrip"
+            public static let reopenStripDismiss = "popover.sessions.reopenStrip.dismiss"
+            /// The same place while a Reopen all is still running.
+            public static let reopenProgress = "popover.sessions.reopenProgress"
+
+            /// The Closed list's search field.
+            public static let closedSearch = "popover.sessions.closed.search"
+
+            /// Empty and waiting states: "No running sessions", "No matches",
+            /// and the progress indicator shown while the index builds.
+            public static let emptyLive = "popover.sessions.empty.live"
+            public static let emptyNoMatches = "popover.sessions.empty.noMatches"
+            public static let closedIndexing = "popover.sessions.closed.indexing"
+
+            /// The strip at the top of the tab when macOS has notifications
+            /// turned off for AgentMenu, with the System Settings path (R32).
+            public static let notificationsDenied = "popover.sessions.notificationsDenied"
+        }
     }
 
     // MARK: Settings
@@ -157,6 +270,7 @@ public enum AccessibilityID {
             public static let chooseDirectory = "settings.accounts.chooseDirectory"
             public static let name = "settings.accounts.name"
             public static let installBridge = "settings.accounts.installBridge"
+            public static let removeBridge = "settings.accounts.removeBridge"
         }
 
         /// U11's General tab. The updater's own window is Sparkle's and
@@ -175,6 +289,15 @@ public enum AccessibilityID {
         /// The login item toggle in the General tab. Same string as
         /// MeetingHop's, so one scenario can drive either app.
         public static let launchAtLogin = "settings.launchAtLoginToggle"
+        /// "Reopen sessions at login" in the General tab (R25).
+        public static let reopenAtLogin = "settings.reopenAtLoginToggle"
+
+        /// "Notify when a session needs you" in the General tab, and the note
+        /// beside it when macOS is blocking notifications (R32).
+        public static let notifyNeedsYou = "settings.notifyNeedsYouToggle"
+        /// "Notify when a session I launched finishes its turn" (R33).
+        public static let notifyYourTurn = "settings.notifyYourTurnToggle"
+        public static let notificationsDenied = "settings.notificationsDenied"
 
         public enum Agents {
             public static func path(_ agentID: String) -> String { "settings.agents.\(agentID).path" }
@@ -220,5 +343,15 @@ public enum AccessibilityID {
     public enum LaunchAtLoginPrompt {
         public static let accept = "launchAtLoginPrompt.accept"
         public static let decline = "launchAtLoginPrompt.decline"
+    }
+
+    // MARK: Quit confirmation
+
+    /// The `NSAlert` Quit and Quit all show when an affected session is
+    /// Working (U12, R21). Fixed identifiers: the alert's text names sessions,
+    /// the identifiers never do.
+    public enum QuitPrompt {
+        public static let confirm = "quitPrompt.confirm"
+        public static let cancel = "quitPrompt.cancel"
     }
 }

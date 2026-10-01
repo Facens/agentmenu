@@ -747,6 +747,7 @@ private func runAppFreshEnvironmentWiringTests(_ t: TestRunner, _ root: URL) {
     let vmScript = root.appendingPathComponent("harness/lib/vm.sh").path
     let appfreshScript = root.appendingPathComponent("harness/lib/appfresh.sh").path
     let runDir = dir.path("rundir")
+    var hostDirectory = ""
 
     let env = [
         "HARNESS_APPFRESH_APP": bundle,
@@ -777,8 +778,47 @@ private func runAppFreshEnvironmentWiringTests(_ t: TestRunner, _ root: URL) {
         t.expect(!configPath.isEmpty, "the journal echoed a config path")
         t.expect(!configPath.hasPrefix(home), "the config path is never under the fixture 'maintainer' home — got: \(configPath)")
         t.expect(configPath.contains("agentmenu-appfresh."), "the config path is under the mktemp -d isolated root, not some other location — got: \(configPath)")
+        // The session store is the app's own file under Application Support,
+        // which snapshot.sh guards: without this variable a run that renamed a
+        // session would write the maintainer's own store.
+        let storePath = payload["session_store"] as? String ?? ""
+        t.expect(!storePath.isEmpty, "AGENTMENU_SESSION_STORE reached the app")
+        t.expect(!storePath.hasPrefix(home), "the session store path is never under the fixture 'maintainer' home — got: \(storePath)")
+        t.expect(storePath.contains("agentmenu-appfresh.") && storePath.hasSuffix("/sessions/sessions.json"), "the session store is a file under the mktemp -d isolated root — got: \(storePath)")
+        // The session host directory: short enough for a socket (103 bytes
+        // including `/s`), under /tmp rather than the long $TMPDIR, outside
+        // the isolated root, named in a breadcrumb, and really there.
+        let hostPath = payload["session_host"] as? String ?? ""
+        t.expect(!hostPath.isEmpty, "AGENTMENU_SESSION_HOST_DIR reached the app")
+        t.expect(hostPath.hasPrefix("/tmp/amh."), "the session host directory is a short path under /tmp — got: \(hostPath)")
+        t.expect(hostPath.utf8.count + 2 <= 103, "its socket path `\(hostPath)/s` fits sockaddr_un's 103 bytes")
+        t.expect(!hostPath.contains("agentmenu-appfresh."), "it is not under the isolated root, whose name would eat the socket's byte budget")
+        t.expect(!hostPath.hasPrefix(home), "the session host directory is never under the fixture 'maintainer' home — got: \(hostPath)")
+        var isDirectory: ObjCBool = false
+        t.expect(FileManager.default.fileExists(atPath: hostPath, isDirectory: &isDirectory) && isDirectory.boolValue, "the session host directory exists while the app runs")
+        let breadcrumb = (try? String(contentsOfFile: "\(runDir)/appfresh.hostdir", encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        t.expectEqual(breadcrumb, hostPath, "appfresh.hostdir names the directory the app was given")
+        hostDirectory = hostPath
     } else {
         t.expect(false, "the stub wrote one parseable journal line — got: '\(journalLine)'")
+    }
+
+    // A fake helper beside a real socket file stands in for the tmux server
+    // the app would have started: teardown must stop it through its own
+    // socket, and nothing else, then remove the directory.
+    let killLog = dir.path("kill.log")
+    if !hostDirectory.isEmpty {
+        let helper = """
+        #!/bin/bash
+        printf '%s\\n' "$*" >> "\(killLog)"
+        """
+        do {
+            try helper.write(toFile: "\(hostDirectory)/tmux", atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: "\(hostDirectory)/tmux")
+        } catch {
+            t.expect(false, "wrote a fake helper into the host directory: \(error)")
+        }
+        t.expect(bindUnixSocketFile(at: "\(hostDirectory)/s"), "made a socket file in the host directory")
     }
 
     // Teardown afterward, so this scratch run leaves nothing behind either.
@@ -792,6 +832,32 @@ private func runAppFreshEnvironmentWiringTests(_ t: TestRunner, _ root: URL) {
     """
     let torn = runProcess("/bin/bash", ["-c", teardownScript], environment: env)
     t.expectEqual(torn.status, 0, "appfresh_teardown runs cleanly on this scratch run — \(torn.stderr)")
+    if !hostDirectory.isEmpty {
+        t.expect(!FileManager.default.fileExists(atPath: hostDirectory), "teardown removed the session host directory")
+        let log = (try? String(contentsOfFile: killLog, encoding: .utf8)) ?? ""
+        t.expectEqual(log, "-S \(hostDirectory)/s kill-server\n", "teardown stopped the server by its own socket, and only that")
+    }
+}
+
+/// Leaves a Unix socket file at `path`: bound, then closed, which is what a
+/// tmux server that was killed leaves behind. In Swift rather than a script
+/// so the test needs nothing a CI runner might not have.
+private func bindUnixSocketFile(at path: String) -> Bool {
+    let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard descriptor >= 0 else { return false }
+    defer { close(descriptor) }
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let bytes = Array(path.utf8CString)
+    guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else { return false }
+    withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+        for (index, byte) in bytes.enumerated() { buffer[index] = UInt8(bitPattern: byte) }
+    }
+    let length = socklen_t(MemoryLayout<sockaddr_un>.size)
+    let result = withUnsafePointer(to: &address) { pointer in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(descriptor, $0, length) }
+    }
+    return result == 0
 }
 
 // MARK: - Happy path: prepare, launch, teardown, snapshots match (AE8)
@@ -950,6 +1016,12 @@ private func runAppFreshCleanTests(_ t: TestRunner, _ root: URL) {
     let orphanToken = runProcess("/bin/ps", ["-p", "\(orphanPID)", "-o", "lstart="]).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
 
     let deadTempdir = "\(deadDir)-tempdir"
+    // A leftover session host directory, and a breadcrumb that names
+    // something that is NOT one of ours: clean must remove the first and
+    // leave the second alone, however it got into the file.
+    let deadHost = "/tmp/amh.clean\(UUID().uuidString.prefix(4).lowercased())"
+    let strayRun = "\(rig.distRoot)/stray-run"
+    let strayTarget = "\(rig.distRoot)/stray-target-should-survive"
     let suite = "dev.facens.agentmenu.harness.test-clean-\(UUID().uuidString.prefix(8))"
     do {
         try FileManager.default.createDirectory(atPath: deadTempdir, withIntermediateDirectories: true)
@@ -958,10 +1030,21 @@ private func runAppFreshCleanTests(_ t: TestRunner, _ root: URL) {
         try "\(orphanPID)\n\(orphanToken)\n".write(toFile: "\(deadDir)/appfresh.pid", atomically: true, encoding: .utf8)
         try "\(deadTempdir)\n".write(toFile: "\(deadDir)/appfresh.tempdir", atomically: true, encoding: .utf8)
         try "\(suite)\n".write(toFile: "\(deadDir)/appfresh.suite", atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(atPath: deadHost, withIntermediateDirectories: true)
+        try "\(deadHost)\n".write(toFile: "\(deadDir)/appfresh.hostdir", atomically: true, encoding: .utf8)
+        try "x".write(toFile: "\(deadHost)/tmux-state", atomically: true, encoding: .utf8)
     } catch {
         t.expect(false, "wrote the dead run's fixtures: \(error)")
         orphan.terminate()
         return
+    }
+    do {
+        try FileManager.default.createDirectory(atPath: strayRun, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: strayTarget, withIntermediateDirectories: true)
+        try "{\"supervisor_pid\": 999999, \"supervisor_token\": \"not-a-real-token\"}".write(toFile: "\(strayRun)/report.json", atomically: true, encoding: .utf8)
+        try "\(strayTarget)\n".write(toFile: "\(strayRun)/appfresh.hostdir", atomically: true, encoding: .utf8)
+    } catch {
+        t.expect(false, "wrote the stray run's fixtures: \(error)")
     }
     _ = runProcess("/usr/bin/defaults", ["write", suite, "harnessJournal", "-string", "journal.ndjson"])
 
@@ -986,6 +1069,8 @@ private func runAppFreshCleanTests(_ t: TestRunner, _ root: URL) {
     t.expect(dry.stdout.contains("would stop orphaned app-fresh process \(orphanPID)"), "dry-run names the orphaned process — got: \(dry.stdout)")
     t.expect(dry.stdout.contains("would delete leftover suite \(suite)"), "dry-run names the leftover suite — got: \(dry.stdout)")
     t.expect(dry.stdout.contains("would remove leftover app-fresh root \(deadTempdir)"), "dry-run names the leftover root — got: \(dry.stdout)")
+    t.expect(dry.stdout.contains("would stop and remove leftover session host \(deadHost)"), "dry-run names the leftover session host — got: \(dry.stdout)")
+    t.expect(FileManager.default.fileExists(atPath: deadHost), "a dry run does not remove the session host directory")
     t.expect(runProcess("/bin/kill", ["-0", "\(orphanPID)"]).status == 0, "a dry run does not touch the orphan process")
     t.expect(FileManager.default.fileExists(atPath: deadTempdir), "a dry run does not remove the isolated root")
 
@@ -993,10 +1078,13 @@ private func runAppFreshCleanTests(_ t: TestRunner, _ root: URL) {
     t.expectEqual(real.status, 0, "clean exits 0 — \(real.stderr)")
     t.expect(runProcess("/bin/kill", ["-0", "\(orphanPID)"]).status != 0, "clean stopped the orphaned app process")
     t.expect(!FileManager.default.fileExists(atPath: deadTempdir), "clean removed the dead run's isolated root")
+    t.expect(!FileManager.default.fileExists(atPath: deadHost), "clean removed the dead run's session host directory")
+    t.expect(FileManager.default.fileExists(atPath: strayTarget), "clean never removes a directory outside /tmp/amh.*, whatever a breadcrumb says")
     t.expect(!FileManager.default.fileExists(atPath: "\(NSHomeDirectory())/Library/Preferences/\(suite).plist"), "clean removed the leftover suite plist")
     t.expect(FileManager.default.fileExists(atPath: aliveTempdir), "clean left the live run's isolated root alone")
 
     // Defensive: only fires if an assertion above returned early.
+    try? FileManager.default.removeItem(atPath: deadHost)
     _ = runProcess("/usr/bin/defaults", ["delete", suite])
     try? FileManager.default.removeItem(atPath: aliveTempdir)
     if runProcess("/bin/kill", ["-0", "\(orphanPID)"]).status == 0 {
@@ -1025,7 +1113,7 @@ trap 'exit 0' TERM
 leaf="$(defaults read "$AGENTMENU_DEFAULTS_SUITE" harnessJournal 2>/dev/null)"
 if [ -n "$leaf" ]; then
     mkdir -p "$AGENTMENU_HARNESS_DIR"
-    printf '{"seq":1,"event":"harness started","data":{"config":"%s","argv":"%s"}}\n' "$AGENTMENU_CONFIG" "$*" >> "$AGENTMENU_HARNESS_DIR/$leaf"
+    printf '{"seq":1,"event":"harness started","data":{"config":"%s","session_store":"%s","session_host":"%s","argv":"%s"}}\n' "$AGENTMENU_CONFIG" "${AGENTMENU_SESSION_STORE:-}" "${AGENTMENU_SESSION_HOST_DIR:-}" "$*" >> "$AGENTMENU_HARNESS_DIR/$leaf"
 fi
 if [ -n "${HARNESS_APPFRESH_STUB_ESCAPE:-}" ]; then
     echo "escaped $(date)" >> "$HARNESS_APPFRESH_STUB_ESCAPE"

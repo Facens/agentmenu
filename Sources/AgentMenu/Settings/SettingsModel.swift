@@ -48,6 +48,15 @@ final class SettingsModel: ObservableObject {
         }
     }
 
+    /// Settings › General › "Reopen sessions at login" (R25), in config.toml: when
+    /// AgentMenu starts after a restart, the sessions that were running come
+    /// back without a click. Off until answered. Moving the toggle is an answer,
+    /// so the banner's question is not asked afterwards.
+    var reopenAtLogin: Bool {
+        get { config.reopenAtLogin }
+        set { config.setReopenAtLogin(newValue) }
+    }
+
     /// `[updates] beta` in config.toml, which is the only copy of this
     /// answer — Sparkle persists no channel preference (KTD20).
     /// Shows the preference as it stands — the user's choice, or the
@@ -60,10 +69,43 @@ final class SettingsModel: ObservableObject {
 
     var updater: UpdaterController { environment.updater }
 
+    /// Settings › General › "Notify when a session needs you", in
+    /// config.toml. Turning it on is a user action, so it is also one of the
+    /// moments macOS is asked for permission if it has not been (KTD15).
+    var notifyNeedsYou: Bool {
+        get { config.notifyNeedsYou }
+        set {
+            config.notifyNeedsYou = newValue
+            if newValue { environment.notifier.requestAuthorizationIfNeeded() }
+        }
+    }
+
+    /// Settings › General › "Notify when a session I launched finishes its
+    /// turn" (R33), in config.toml. On by default; turning it on is a user
+    /// action that can ask macOS for permission too.
+    var notifyYourTurn: Bool {
+        get { config.notifyYourTurn }
+        set {
+            config.notifyYourTurn = newValue
+            if newValue { environment.notifier.requestAuthorizationIfNeeded() }
+        }
+    }
+
+    /// Set while macOS blocks notifications, with the System Settings path.
+    var notificationsGuidance: String? {
+        NotificationGuidance.settings(authorization: environment.notifier.authorization)
+    }
+
+    /// The General pane appeared: the answer may have changed in System
+    /// Settings since it was last read.
+    func refreshNotificationAuthorization() {
+        environment.notifier.refreshAuthorization()
+    }
+
     @Published var selectedFolder: String?
     @Published var selectedProfile: String?
     @Published var failure: String?
-    /// What the last status-line bridge install reported, per account, so the
+    /// What the last status-line bridge install or removal reported, per account, so the
     /// Accounts pane can show the CLI's own account of the file and key it
     /// touched next to the button that asked for it.
     @Published var bridgeInstallReport: [String: String] = [:]
@@ -91,6 +133,9 @@ final class SettingsModel: ObservableObject {
         // `config` is computed, so the views watching this object have to be
         // told when the thing it reads through changes.
         environment.$config
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        environment.notifier.$authorization
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
         environment.$saveFailure
@@ -243,6 +288,29 @@ final class SettingsModel: ObservableObject {
             let report = AppEnvironment.installStatusLine(for: profile)
             await MainActor.run { self.bridgeInstallReport[profileID] = report }
         }
+    }
+
+    /// R14: the way back out of `installStatusLineBridge`, the same way — the
+    /// CLI restores `statusLine.command` and deletes the bridge's files, and
+    /// the pane shows its account of each next to the button.
+    func removeStatusLineBridge(profileID: String) {
+        guard let profile = config.profile(id: profileID) else { return }
+        bridgeInstallReport[profileID] = "Removing…"
+        Task.detached(priority: .userInitiated) {
+            let report = AppEnvironment.removeStatusLineBridge(for: profile)
+            await MainActor.run { self.bridgeInstallReport[profileID] = report }
+        }
+    }
+
+    /// Whether this account's own bridge script is on disk — what the pane
+    /// shows as installed, and the same thing the launch-time re-validation
+    /// keys off.
+    func bridgeScriptExists(profileID: String) -> Bool {
+        guard let profile = config.profile(id: profileID) else { return false }
+        return FileManager.default.fileExists(
+            atPath: profile.expandedConfigDirectory
+                .appendingPathComponent(StatuslineBridge.scriptFilename).path
+        )
     }
 
     func addProfile() {

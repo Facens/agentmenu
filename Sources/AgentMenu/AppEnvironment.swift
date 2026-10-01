@@ -28,6 +28,11 @@ final class AppEnvironment: ObservableObject {
     /// effect.
     let overrides: Overrides
 
+    /// The app-owned session store (KTD12): renames and the launch ledger.
+    /// One instance for the whole process, so the launch path and the
+    /// Sessions model never work from different in-memory copies.
+    let sessionStore: SessionStore
+
     /// The one copy of the configuration in this process.
     ///
     /// It used to be three — this object plus a copy captured inside each view
@@ -69,6 +74,41 @@ final class AppEnvironment: ObservableObject {
     private(set) lazy var popover = PopoverModel(environment: self, service: self)
     private(set) lazy var settings = SettingsModel(environment: self)
     private(set) lazy var setup = SetupModel(environment: self)
+    /// The live and closed sessions and the menu-bar badge's count (U5).
+    /// `AppDelegate` starts it at launch: the badge has to be right while the
+    /// popover is closed.
+    private(set) lazy var sessions = SessionsModel(environment: self)
+    /// AgentMenu's own tmux server (U9). Built on first use and never prepared
+    /// here: nothing is created on disk until a hosted launch asks for it, so
+    /// a user who keeps nothing running never gets a host directory. Nil when
+    /// no socket path fits.
+    private(set) lazy var sessionHost: SessionHost? = {
+        guard let location = try? SessionHostLocation.resolve(
+            override: overrides.sessionHostDirectory,
+            bundleIdentifier: Bundle.main.bundleIdentifier
+        ) else { return nil }
+        let bundle = Bundle.main.bundleURL
+        return SessionHost(
+            location: location,
+            helpersDirectory: bundle.pathExtension == "app" ? SessionHost.bundledHelpersDirectory(bundleURL: bundle) : nil
+        )
+    }()
+
+    /// Every Claude Code launch (U11): ledger row, then host or plain.
+    private(set) lazy var ownedLauncher = OwnedLauncher(
+        store: sessionStore,
+        host: sessionHost,
+        hostLaunched: { launchID, terminal, ok in
+            HarnessJournal.shared.hostLaunch(launchID: launchID, terminal: terminal, ok: ok)
+        },
+        ledgerWritten: { [weak self] in
+            Task { @MainActor [weak self] in self?.sessions.ledgerChanged() }
+        }
+    )
+
+    /// Needs-you notifications (U7). Its delegate is set in
+    /// `applicationWillFinishLaunching`, before launch completes.
+    private(set) lazy var notifier = SessionNotifier(environment: self)
 
     /// Set when a save fails, so a surface can show it rather than losing the
     /// change silently.
@@ -94,6 +134,7 @@ final class AppEnvironment: ObservableObject {
         self.overrides = overrides
         let store = store ?? ConfigStore(url: overrides.config ?? ConfigStore.defaultURL)
         self.store = store
+        self.sessionStore = SessionStore(url: overrides.sessionStore ?? SessionStore.defaultURL)
         self.usageReader = UsageReader()
         self.config = (try? store.load()) ?? Config()
         // Without this the first `reloadIfChangedOnDisk` always reloads and
@@ -280,19 +321,52 @@ final class AppEnvironment: ObservableObject {
     /// the pipe buffer holds can never freeze the settings window. The same
     /// two hazards `StatuslineBridgeCommand` guards against on its own side.
     nonisolated static func installStatusLine(for profile: Profile) -> String {
+        switch runStatuslineCLI(["install-statusline", "--profile", profile.id], for: profile) {
+        case .unavailable(let message):
+            return message
+        case .finished(let output, let ok):
+            // The only path on which the CLI can have written anything (KTD3),
+            // and its own report is what names the files it wrote.
+            HarnessJournal.shared.bridgeInstalled(profile: profile, ok: ok, report: output)
+            return output.isEmpty ? "Installed." : output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// R14: the way back out of `installStatusLine(for:)`, through the same
+    /// door — the bundled CLI does the restoring and the deleting and names
+    /// each one, and the app only asks. Not journalled as an install: the
+    /// harness's `bridgeInstalled` event records files written, and this
+    /// writes none.
+    nonisolated static func removeStatusLineBridge(for profile: Profile) -> String {
+        switch runStatuslineCLI(["install-statusline", "--remove", "--profile", profile.id], for: profile) {
+        case .unavailable(let message):
+            return message
+        case .finished(let output, _):
+            return output.isEmpty ? "Removed." : output.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    private enum StatuslineCLIResult {
+        /// The tool could not be run, or did not finish; the message is
+        /// ready to show.
+        case unavailable(String)
+        case finished(output: String, ok: Bool)
+    }
+
+    private nonisolated static func runStatuslineCLI(_ arguments: [String], for profile: Profile) -> StatuslineCLIResult {
         guard let cli = cliPath() else {
-            return "The bundled command-line tool is missing from this build. Reinstall AgentMenu from a release."
+            return .unavailable("The bundled command-line tool is missing from this build. Reinstall AgentMenu from a release.")
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: cli)
-        process.arguments = ["install-statusline", "--profile", profile.id]
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
         do {
             try process.run()
         } catch {
-            return "Could not run the command-line tool: \(error.localizedDescription)"
+            return .unavailable("Could not run the command-line tool: \(error.localizedDescription)")
         }
 
         // Read to EOF on another queue so the child is never blocked on a
@@ -313,20 +387,12 @@ final class AppEnvironment: ObservableObject {
         if exited.wait(timeout: .now() + 15) != .success {
             process.terminate()
             _ = exited.wait(timeout: .now() + 2)
-            return "The command-line tool did not finish within 15 seconds and was stopped. Nothing was reported as written; check \(profile.configDirectory)/settings.json before trying again."
+            return .unavailable("The command-line tool did not finish within 15 seconds and was stopped. Nothing was reported as written; check \(profile.configDirectory)/settings.json before trying again.")
         }
         outputGroup.wait()
 
         let output = String(data: collected, encoding: .utf8) ?? ""
-        // The only path on which the CLI can have written anything (KTD3),
-        // and its own report is what names the files it wrote.
-        HarnessJournal.shared.bridgeInstalled(
-            profile: profile,
-            ok: process.terminationStatus == 0,
-            report: output
-        )
-
-        return output.isEmpty ? "Installed." : output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .finished(output: output, ok: process.terminationStatus == 0)
     }
 
     /// `Contents/Resources/bin/agentmenu` beside the running app (KTD8).
@@ -382,7 +448,10 @@ final class AppEnvironment: ObservableObject {
         Task.detached(priority: .background) {
             for profile in profiles {
                 // "Has a bridge installed" is read straight off disk — this
-                // profile's own `agentmenu-statusline.sh` exists — rather
+                // profile's own `agentmenu-statusline.sh` exists, which is
+                // also why "Remove" in Settings keeps it from coming back:
+                // removal deletes that script, so the profile reads as
+                // `.absent` here and is never re-installed — rather
                 // than by first checking that `settings.json` still names
                 // it. That trade is deliberate: confirming the latter means
                 // resolving the right `settings.json` for this profile
@@ -402,11 +471,8 @@ final class AppEnvironment: ObservableObject {
                 // its settings.json points at a sibling's, and that sibling
                 // is only re-validated when its own profile is reached in
                 // this same loop.
-                let scriptURL = profile.expandedConfigDirectory
-                    .appendingPathComponent(StatuslineBridge.scriptFilename)
-                let contents = try? String(contentsOf: scriptURL, encoding: .utf8)
                 let state = StatuslineBridge.bridgeState(
-                    scriptContents: contents, expectedCLIPath: expectedCLIPath
+                    profileDirectory: profile.expandedConfigDirectory, expectedCLIPath: expectedCLIPath
                 )
                 guard case .stale = state else { continue }
 
@@ -440,6 +506,7 @@ enum LaunchError: LocalizedError {
     case terminalUnavailable(String)
     case folderMissing(String)
     case binaryMissing(String)
+    case hostUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -453,6 +520,8 @@ enum LaunchError: LocalizedError {
             return "That folder is gone: \(path)"
         case .binaryMissing(let binary):
             return "Could not find the “\(binary)” binary. Set its path in Settings."
+        case .hostUnavailable:
+            return "The session host is not available, so this session cannot be reattached."
         }
     }
 }
@@ -463,11 +532,16 @@ extension AppEnvironment: LaunchServicing {
     /// launch itself — comes through here, so what the popover shows and what
     /// the command carries cannot disagree.
     func resolvedPreset(for target: LaunchTarget, oneShot: Preset) -> ResolvedPreset {
-        PresetResolver.resolve(
+        let own = target.preset.overlaid(with: oneShot)
+        return PresetResolver.resolve(
             global: config.defaults,
             folder: target.preset,
             oneShot: oneShot,
-            agent: agentManifest(for: target.preset.overlaid(with: oneShot))
+            agent: agentManifest(for: own),
+            // The terminal this launch really uses, which falls back to the
+            // first usable one when nothing names it — the same lookup
+            // `launch` makes, so keep-running is judged on the same terminal.
+            terminalID: terminalManifest(for: own)?.id
         )
     }
 
@@ -480,13 +554,32 @@ extension AppEnvironment: LaunchServicing {
 
         let binaryPath = try resolveOrReport(agent.binary)
         let profile = (profileID ?? resolved.preset.profile).flatMap { config.profile(id: $0) }
-        let command = try CommandBuilder.build(
-            agent: agent,
-            resolved: resolved,
-            profile: profile,
-            directory: target.expandedPath,
-            binaryPath: binaryPath
-        )
+        // Every Claude Code launch is owned (U11): pinned to a fresh id that
+        // is also its ledger id, so the registry row it produces can be
+        // matched. Other agents cannot be pinned or matched, so they launch as
+        // before and are not recorded.
+        let ownsLaunch = agent.id == RegistryReader.claudeAgentID
+        let launchID = LaunchLedger.newLaunchID()
+        let command: LaunchCommand
+        if ownsLaunch {
+            command = try OwnedLauncher.command(
+                agent: agent,
+                resolved: resolved,
+                profile: profile,
+                directory: target.expandedPath,
+                binaryPath: binaryPath,
+                kind: .fresh,
+                launchID: launchID
+            )
+        } else {
+            command = try CommandBuilder.build(
+                agent: agent,
+                resolved: resolved,
+                profile: profile,
+                directory: target.expandedPath,
+                binaryPath: binaryPath
+            )
+        }
         // The command is built here and nowhere else, so this is the only
         // place the hook can record what a launch is about to run (KTD3).
         HarnessJournal.shared.launchRequested(
@@ -497,12 +590,56 @@ extension AppEnvironment: LaunchServicing {
             preset: resolved.preset
         )
         do {
-            try await open(command, in: terminal)
+            if ownsLaunch {
+                let plan = OwnedLaunchPlan(
+                    launchID: launchID,
+                    kind: .fresh,
+                    profileID: profile?.id,
+                    configDirectory: profile?.expandedConfigDirectory.path,
+                    preset: resolved.preset,
+                    terminalID: terminal.id,
+                    command: command,
+                    wantsHost: resolved.keepRunning == true
+                )
+                let outcome = try await ownedLauncher.launch(plan) { [self] command in
+                    try await self.open(command, in: terminal)
+                }
+                // Keep-running was on and the host could not start, so this ran
+                // as a plain launch (the journal's `host launch ok=false` says
+                // so too). Not a launch failure, but not silent either.
+                if let failure = outcome.hostFailure {
+                    FileHandle.standardError.write(Data("agentmenu: launched without keep-running: \(failure)\n".utf8))
+                }
+            } else {
+                try await open(command, in: terminal)
+            }
         } catch {
             HarnessJournal.shared.launchResult(target: target, kind: "agent", error: error)
             throw error
         }
         HarnessJournal.shared.launchResult(target: target, kind: "agent", error: nil)
+        // The first launch AgentMenu makes is one of the two user actions that
+        // ask macOS for notification permission (KTD15).
+        notifier.requestAuthorizationIfNeeded()
+    }
+
+    /// Opens a new terminal window attached to a running hosted session
+    /// (R8, R37): a click on a detached owned row, or on one whose window
+    /// cannot be reached. `terminalID` is the terminal the launch recorded;
+    /// when that one is gone the default terminal is used.
+    func openAttachWindow(launchID: String, workingDirectory: String, terminalID: String?) async throws {
+        guard let host = sessionHost else { throw LaunchError.hostUnavailable }
+        let recorded = terminalID.flatMap { registry.terminal(id: $0) }.flatMap { isUsable($0) ? $0 : nil }
+        guard let terminal = recorded ?? terminalManifest(for: Preset()) else {
+            throw LaunchError.terminalUnavailable(terminalID ?? "none selected")
+        }
+        let command = try await Task.detached(priority: .userInitiated) {
+            // The helper copies are in place after the first hosted launch, and
+            // after an update they are refreshed here before anything runs.
+            try host.ensureHost()
+            return host.attachLaunchCommand(launchID: launchID, workingDirectory: workingDirectory)
+        }.value
+        try await open(command, in: terminal)
     }
 
     func openTerminal(target: LaunchTarget, oneShot: Preset) async throws {
@@ -538,10 +675,10 @@ extension AppEnvironment: LaunchServicing {
     /// `osascript` can take seconds to answer — longer still while macOS asks
     /// the user whether this app may control the terminal — and every one of
     /// those seconds used to be a frozen popover.
-    private func open(_ command: LaunchCommand, in terminal: TerminalManifest) async throws {
+    func open(_ command: LaunchCommand, in terminal: TerminalManifest) async throws {
         let binaryPath = try terminal.binary.map { try resolveOrReport($0) }
         try await Task.detached(priority: .userInitiated) {
-            try TerminalLauncher(runner: TerminalLauncher.systemRunner())
+            try TerminalLauncher(timedRunner: TerminalLauncher.systemTimedRunner(), consent: AutomationConsent.query(bundleID:))
                 .open(command: command, terminal: terminal, binaryPath: binaryPath)
         }.value
     }
@@ -550,7 +687,7 @@ extension AppEnvironment: LaunchServicing {
     /// executable, otherwise one login-shell lookup, and the answer is cached so
     /// the next launch does not pay for it. A second failure names the binary
     /// (AE5) rather than failing silently.
-    private func resolveOrReport(_ binary: String) throws -> String {
+    func resolveOrReport(_ binary: String) throws -> String {
         do {
             let path = try BinaryResolver().resolve(binary, cached: config.binaries[binary])
             if config.binaries[binary] != path {
@@ -578,6 +715,9 @@ extension AppEnvironment: LaunchServicing {
         options.permission = agent.permissionMode
         options.advisor = agent.advisor?.values
         options.canDisableAdvisor = agent.advisor?.canDisable ?? false
+        options.keepRunning = KeepRunningSupport.supports(
+            agentID: agent.id, terminalID: terminalManifest(for: preset)?.id
+        )
         return options
     }
 

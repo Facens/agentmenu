@@ -17,6 +17,18 @@
 # popover's folder rows, only waits for the alert `AppDelegate.
 # applicationDidFinishLaunching` raises straight after the status item goes
 # up, so no profile, folder or agent is needed for it to reach that point.
+# `keep_running = false` (R15, KTD16): "keep running when window closes" is ON
+# for any config that does not say otherwise, so every fixture that writes a
+# config.toml pins it off. A scenario written before that field existed
+# tests a plain launch, and must keep testing one once a hosted launch path
+# exists — Tests/AgentMenuKitTests/HarnessFixtureTests.swift asserts every
+# such fixture carries it.
+# `notifications_asked = true` (KTD15, KTD16): AgentMenu asks macOS for
+# notification permission on the first launch it makes or the first open of
+# the Sessions tab, and that system prompt is one the shared dialog script
+# cannot answer. Planting the key means no scenario meets it —
+# Tests/AgentMenuKitTests/HarnessFixtureTests.swift asserts every fixture that
+# writes a config.toml carries it.
 set -euo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
@@ -29,4 +41,8 @@ mkdir -p "$HOME/.config/agentmenu"
 cat > "$HOME/.config/agentmenu/config.toml" <<'EOF'
 schema = 1
 first_run_completed = true
+notifications_asked = true
+
+[defaults]
+keep_running = false
 EOF

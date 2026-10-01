@@ -27,8 +27,8 @@ case nil, "--help", "-h", "help":
     agentmenu \(agentMenuVersion)
 
     Usage:
-      agentmenu resolve <dir> [--profile|--config-dir|--command]
-      agentmenu install-statusline [--profile <id>] [--dry-run]
+      agentmenu resolve <dir> [--profile|--config-dir|--command|--keep-running]
+      agentmenu install-statusline [--profile <id>] [--dry-run] [--remove]
       agentmenu --version
     """)
 case "resolve":

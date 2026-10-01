@@ -55,6 +55,9 @@ struct OverrideDisclosure: View {
                 if let values = options.advisor {
                     advisorControl(values)
                 }
+                if options.keepRunning {
+                    keepRunningControl()
+                }
                 if !options.agents.isEmpty {
                     control("Agent", values: options.agents.map(\.id), selection: $oneShot.agent,
                             inherited: effective.agent, names: Dictionary(uniqueKeysWithValues: options.agents.map { ($0.id, $0.name) }),
@@ -164,6 +167,29 @@ struct OverrideDisclosure: View {
             .labelsHidden()
             .controlSize(.small)
             .accessibilityIdentifier(AccessibilityID.Popover.overrideAdvisor(target))
+        }
+    }
+
+    /// Keep running when the window closes: inherit, on, or off. The inherited
+    /// value is in the first choice's label, so "Inherit (on)" says what
+    /// leaving it alone does (R15). `effective` is the resolved preset, where
+    /// the field is always set while this control is on screen.
+    private func keepRunningControl() -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Keep running when window closes")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Picker("Keep running when window closes", selection: $oneShot.keepRunning) {
+                Text("Inherit (\((effective.keepRunning ?? Preset.keepRunningDefault) ? "on" : "off"))")
+                    .tag(Bool?.none)
+                Text("On").tag(Bool?.some(true))
+                Text("Off").tag(Bool?.some(false))
+            }
+            .labelsHidden()
+            .controlSize(.small)
+            .accessibilityIdentifier(AccessibilityID.Popover.overrideKeepRunning(target))
         }
     }
 

@@ -4,15 +4,20 @@
 import Foundation
 import AgentMenuKit
 
-/// `agentmenu resolve <dir> [--profile|--config-dir|--command]` (R30): the
+/// `agentmenu resolve <dir> [--profile|--config-dir|--command|--keep-running]` (R30): the
 /// one source of truth the shell asks instead of keeping its own copy of the
 /// folder->account mapping. Exit codes: `2` is a usage error (bad flags,
 /// missing argument); `1` means "nothing to print" — the directory is not
 /// configured, or what it names cannot be resolved — so a shell function can
 /// fall back to its own default without misreading a real answer; `0` is
 /// success, with the answer on stdout and nothing else there.
+///
+/// `--keep-running` (R15) prints the resolved "keep running when window
+/// closes" value for the folder: `true`, `false`, or `n/a` when the folder's
+/// agent or terminal cannot keep a session running. It is a mode of its own,
+/// so what the other three print is untouched.
 func runResolve(_ args: [String], configStore: ConfigStore) -> Int32 {
-    enum Mode { case profile, configDir, command }
+    enum Mode { case profile, configDir, command, keepRunning }
 
     var mode: Mode = .profile
     var directory: String?
@@ -21,6 +26,7 @@ func runResolve(_ args: [String], configStore: ConfigStore) -> Int32 {
         case "--profile": mode = .profile
         case "--config-dir": mode = .configDir
         case "--command": mode = .command
+        case "--keep-running": mode = .keepRunning
         default:
             guard directory == nil, !arg.hasPrefix("--") else {
                 fail("agentmenu resolve: unknown argument '\(arg)'")
@@ -30,7 +36,7 @@ func runResolve(_ args: [String], configStore: ConfigStore) -> Int32 {
         }
     }
     guard let directory else {
-        fail("agentmenu resolve: usage: agentmenu resolve <dir> [--profile|--config-dir|--command]")
+        fail("agentmenu resolve: usage: agentmenu resolve <dir> [--profile|--config-dir|--command|--keep-running]")
         return 2
     }
 
@@ -94,7 +100,57 @@ func runResolve(_ args: [String], configStore: ConfigStore) -> Int32 {
         // what that popover session would compute from the same file.
         let launchProfileID = folder.preset.profile ?? config.activeProfileID ?? config.profiles.first?.id
         return resolveCommand(folder: folder, config: config, profileID: launchProfileID)
+
+    case .keepRunning:
+        return resolveKeepRunning(folder: folder, config: config)
     }
+}
+
+/// What both the `--keep-running` and `--command` branches start from: the
+/// loaded manifest registry, the merged global+folder preset, and the agent
+/// that preset names (else the first enabled, verified one). Prints the "no
+/// agent" failure and returns nil when there is none, so a caller only has to
+/// answer `1`.
+private func loadRegistryAndAgent(
+    folder: FolderTarget,
+    config: Config
+) -> (registry: ManifestRegistry, merged: Preset, agent: AgentManifest)? {
+    let registry = ManifestRegistry(
+        bundledRoot: ResourceRoot.bundled(),
+        userRoot: resolvedManifestUserRoot()
+    )
+    registry.load()
+
+    let merged = config.defaults.overlaid(with: folder.preset)
+    let agent = merged.agent.flatMap { registry.agent(id: $0) } ?? registry.agents.first { $0.enabled && !$0.unverified }
+    guard let agent else {
+        fail("agentmenu resolve: no agent is configured or available")
+        return nil
+    }
+    return (registry, merged, agent)
+}
+
+/// The `--keep-running` branch: the same `PresetResolver` call the popover's
+/// `resolvedPreset(for:oneShot:)` makes, so this prints what a launch from the
+/// popover would carry. The terminal follows `AppEnvironment.terminalManifest`:
+/// the merged preset's own, else the first enabled, verified one — "enabled"
+/// read the way `ManifestRegistry.availability` reads it (the configuration's
+/// `[terminals.<id>]` state, else the manifest's own flag) — without the
+/// availability check's installed-application probe, which the CLI does not run.
+private func resolveKeepRunning(folder: FolderTarget, config: Config) -> Int32 {
+    guard let (registry, merged, agent) = loadRegistryAndAgent(folder: folder, config: config) else { return 1 }
+    let terminalID = merged.terminal ?? registry.terminals.first {
+        (config.terminalState[$0.id]?.enabled ?? $0.enabled) && !$0.unverified
+    }?.id
+
+    let resolved = PresetResolver.resolve(
+        global: config.defaults, folder: folder.preset, oneShot: Preset(), agent: agent, terminalID: terminalID
+    )
+    switch resolved.keepRunning {
+    case .some(let value): print(value ? "true" : "false")
+    case .none: print("n/a")
+    }
+    return 0
 }
 
 /// The `--command` branch: builds the exact `LaunchCommand` the popover
@@ -102,20 +158,15 @@ func runResolve(_ args: [String], configStore: ConfigStore) -> Int32 {
 /// never assembled by hand, so `resolve --command` and the popover's own
 /// launch can never drift apart (the plan's "launch parity" gate compares
 /// this string against what the popover launches).
+///
+/// One difference is by design: every fresh launch the app makes is pinned to a
+/// new random id (`--session-id <uuid>`, U11), which a command run from outside
+/// cannot reproduce, so this prints the launched command *without* that pair —
+/// `CommandBuilder` is called without a `sessionID` — and the output is
+/// identical from one call to the next. Everything else, in the same order,
+/// is what the popover types (`CommandBuilder.build`'s documented flag order).
 private func resolveCommand(folder: FolderTarget, config: Config, profileID: String?) -> Int32 {
-    let registry = ManifestRegistry(
-        bundledRoot: ResourceRoot.bundled(),
-        userRoot: resolvedManifestUserRoot()
-    )
-    registry.load()
-
-    let mergedForAgent = config.defaults.overlaid(with: folder.preset)
-    let agentID = mergedForAgent.agent
-    let agent = agentID.flatMap { registry.agent(id: $0) } ?? registry.agents.first { $0.enabled && !$0.unverified }
-    guard let agent else {
-        fail("agentmenu resolve: no agent is configured or available")
-        return 1
-    }
+    guard let (registry, _, agent) = loadRegistryAndAgent(folder: folder, config: config) else { return 1 }
 
     let resolved = PresetResolver.resolve(global: config.defaults, folder: folder.preset, oneShot: Preset(), agent: agent)
     let profile = profileID.flatMap { config.profile(id: $0) }

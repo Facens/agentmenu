@@ -1,6 +1,8 @@
 # iTerm2 — verified. This AppleScript is the one the SwiftBar plugin AgentMenu
 # replaces has been using: a new tab in the current window, a new window when
-# iTerm has none.
+# iTerm has none. `write text` is only ever sent to the session that was just
+# created, never to an existing one: a command typed into a running session
+# would land in whatever is running there.
 schema = 1
 id = "iterm2"
 display_name = "iTerm2"
@@ -24,4 +26,54 @@ on run argv
     end if
   end tell
 end run
+"""
+
+# Focus (optional). Takes the session's tty as argument 1, always in the form
+# `/dev/ttysNNN` — the form iTerm's session `tty` property reports. Selects the
+# session, its tab and its window, raises the window if it was minimised, and
+# activates iTerm, which is what moves macOS to the window's Space. Answers
+# `focused`, or `not found` when no session has that tty. AgentMenu checks
+# iTerm is running before it runs this: a `tell` to an app that is not running
+# launches it.
+focus_applescript = """
+on run argv
+  set target to item 1 of argv
+  tell application "iTerm"
+    repeat with w from 1 to count of windows
+      set theWindow to window w
+      repeat with t from 1 to count of tabs of theWindow
+        set theTab to tab t of theWindow
+        repeat with s from 1 to count of sessions of theTab
+          set theSession to session s of theTab
+          if (tty of theSession) is target then
+            try
+              if miniaturized of theWindow then set miniaturized of theWindow to false
+            end try
+            select theWindow
+            select theTab
+            select theSession
+            activate
+            return "focused"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return "not found"
+end run
+"""
+
+# Frontmost tab (optional). Answers the tty of the session the user is looking
+# at right now, in the same `/dev/ttysNNN` form the focus script takes, or an
+# empty string when iTerm has no window. AgentMenu runs it once, when a
+# Needs-you hold-down expires and iTerm is the frontmost app, so a notification
+# is not posted for the prompt already on screen; it never runs while iTerm is
+# in the background (and so never launches it). Without this key, or without an
+# Automation grant, a session here counts as not frontmost and the notification
+# posts.
+frontmost_tty_applescript = """
+tell application "iTerm"
+  if (count of windows) = 0 then return ""
+  return tty of current session of current tab of current window
+end tell
 """

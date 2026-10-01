@@ -24,7 +24,25 @@ struct PopoverView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            profileSwitch
+            // The post-restart banner, in the fixed chrome above the tabs so it
+            // is seen on Launch as well as on Sessions (U14, F2). Not while the
+            // wizard is the whole popover.
+            if !setup.isNeeded {
+                RestoreBanner(model: model.sessions)
+            }
+            // The wizard is the whole popover until it is done, so the tabs
+            // wait for it (U5).
+            if !setup.isNeeded {
+                tabs
+            }
+            // Chrome per tab: the profile switch and the Finder row belong to
+            // Launch; on Sessions the account pills take the switch's place.
+            // The usage strip stays on both and follows the Launch profile.
+            if showsSessions {
+                SessionsPillBar(model: model.sessions)
+            } else {
+                profileSwitch
+            }
             usage
             // In the fixed chrome, above the scrolling list, and not
             // dismissible: it is the reason updates are silently not
@@ -33,15 +51,20 @@ struct PopoverView: View {
             if model.isTranslocated {
                 translocationBanner
             }
-            finderRow
+            if !showsSessions {
+                finderRow
+            }
             if setup.isNeeded {
                 SetupCard(model: setup, done: {})
+            } else if showsSessions {
+                SessionsContent(model: model.sessions, close: close)
             } else {
                 list
             }
             footer
         }
         .frame(width: width)
+        .background { ReopenLastClosedShortcut(model: model.sessions, close: close) }
         .confirmationDialog(
             "Save these values as the global default?",
             isPresented: Binding(
@@ -79,6 +102,24 @@ struct PopoverView: View {
         .padding(.horizontal, 12)
         .padding(.top, 11)
         .padding(.bottom, 8)
+    }
+
+    private var showsSessions: Bool { model.tab == .sessions && !setup.isNeeded }
+
+    /// Launch | Sessions. Launch is selected on every open (KTD16).
+    private var tabs: some View {
+        SegmentedChips(
+            items: [
+                ChipItem(id: PopoverTab.launch.rawValue, title: "Launch", identifier: AccessibilityID.Popover.tabLaunch),
+                ChipItem(id: PopoverTab.sessions.rawValue, title: "Sessions", identifier: AccessibilityID.Popover.tabSessions),
+            ],
+            selectedID: model.tab.rawValue,
+            select: { id in
+                if let tab = PopoverTab(rawValue: id) { model.selectTab(tab) }
+            }
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
     }
 
     /// Hidden entirely when there is only one profile (R16).

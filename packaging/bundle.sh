@@ -35,12 +35,29 @@ swift build -c "$CONFIG" --product AgentMenuCLI
 
 BIN_DIR="$(swift build -c "$CONFIG" --show-bin-path)"
 
+# U8 / KTD2: the tmux AgentMenu ships, built from pinned sources (or restored
+# from the cache keyed by them). Before the bundle is assembled, so a failure
+# here leaves no half-built app behind. Its progress goes to stderr; stdout is
+# the path of the binary.
+TMUX_BIN="$("$ROOT/packaging/tmux/build.sh")"
+
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/bin" "$APP/Contents/Helpers"
 
 # KTD8: the app binary and the CLI never share a directory.
 cp "$BIN_DIR/AgentMenu" "$APP/Contents/MacOS/AgentMenu"
 cp "$BIN_DIR/AgentMenuCLI" "$APP/Contents/Resources/bin/agentmenu"
+
+# R17 / KTD2: the session host. One binary under every name in this list.
+# Two names serve two prompts: the server runs from an app-branded copy, so a
+# folder-access prompt never says "tmux", and the terminal tab runs its attach
+# client from a copy named "tmux", because Terminal.app's close-window check
+# exempts processes with that name and would otherwise ask before every close.
+# The U1 spike decides whether both are needed. The Swift side names the same
+# two files in HostHelperNames (Sessions/HostConfig.swift); dropping one is a
+# one-line change in each place. Nothing else here, in verify-signing.sh or in
+# the CI layout checks lists names: they read the Helpers directory.
+HELPER_NAMES=("tmux" "AgentMenu Session Host")
 
 # Brand assets. The icon set is rendered from code (packaging/icon), so a
 # clean checkout produces it rather than carrying binaries in git.
@@ -132,7 +149,7 @@ fi
 # KTD2 / R3: explicit and inside-out, never --deep (which skips
 # Contents/Resources; verify-signing.sh tells the story). Nested code first,
 # each with its own identifier; the app last, with the app's entitlements
-# (R4). The CLI sends no Apple Events and gets no entitlements.
+# (R4). The CLI and the helpers send no Apple Events and get no entitlements.
 #
 # Sparkle first, and inside it deepest first: the XPC services and the two
 # helper apps are code the framework contains, so a signature over the
@@ -153,6 +170,19 @@ SPARKLE_VERSION_DIR="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
 # sandbox entitlements only when the host app is sandboxed, and this one is
 # not. verify-signing.sh asserts that shape rather than trusting this comment.
 "${SIGN[@]}" --identifier dev.facens.agentmenu.cli "$APP/Contents/Resources/bin/agentmenu"
+# The helpers sit with the CLI: nested code, hardened runtime, no
+# entitlements (they send no Apple Events either), signed before the app.
+# Signed once and then copied, not once per name: a signature carries its own
+# secure timestamp, so signing each copy would make them differ, and the
+# copies are meant to be the same bytes under different names. The signature
+# is embedded in the file, so every copy carries a valid one (verify-signing.sh
+# inspects each file on its own).
+FIRST_HELPER="$APP/Contents/Helpers/${HELPER_NAMES[0]}"
+cp "$TMUX_BIN" "$FIRST_HELPER"
+"${SIGN[@]}" --identifier dev.facens.agentmenu.session-host "$FIRST_HELPER"
+for name in "${HELPER_NAMES[@]:1}"; do
+    cp "$FIRST_HELPER" "$APP/Contents/Helpers/$name"
+done
 "${SIGN[@]}" --entitlements "$ROOT/packaging/AgentMenu.entitlements" "$APP"
 
 # KTD16: the authority assertion where a Developer ID signed it, the

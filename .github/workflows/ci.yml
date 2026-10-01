@@ -31,6 +31,22 @@ jobs:
       - name: Check the source tree
         run: packaging/check-source.sh
 
+      # U8 / R17: the tmux the app ships, built from pinned sources (about
+      # two and a half minutes cold). Restored from the cache when neither the
+      # checksum file nor the build script changed. A cache hit is verified by
+      # the binary's properties only (arm64, macOS 14.0 or lower, system
+      # libraries only, jemalloc), not by the source checksums: those are
+      # checked only when `make tmux` builds. It comes before the tests because
+      # the session-host integration cases use it.
+      - name: Restore the tmux build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .build/tmux
+          key: tmux-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packaging/tmux/sources.sha256', 'packaging/tmux/build.sh') }}
+
+      - name: Build tmux
+        run: make tmux
+
       - name: Build (release)
         run: swift build -c release
 
@@ -46,6 +62,14 @@ jobs:
           test -x dist/AgentMenu.app/Contents/Resources/bin/agentmenu
           test -f dist/AgentMenu.app/Contents/Info.plist
           test -d dist/AgentMenu.app/Contents/Resources/agents
+          # U8: the session host is in the bundle, under at least one name,
+          # and every copy runs. The names come from bundle.sh, not from here.
+          helpers=0
+          for helper in dist/AgentMenu.app/Contents/Helpers/*; do
+            helpers=$((helpers + 1))
+            "$helper" -V | grep -qE '^tmux [0-9]'
+          done
+          test "$helpers" -ge 1
 
       - name: Assert signature consistency
         run: packaging/verify-signing.sh consistency dist/AgentMenu.app

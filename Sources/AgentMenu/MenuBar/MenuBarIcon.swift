@@ -55,6 +55,42 @@ enum MenuBarIcon {
         return badge
     }
 
+    /// The count of sessions waiting on the user, beside the glyph: a symbol
+    /// and a number, in a colour of their own. Empty at zero, so a title
+    /// composed with it is exactly what it was without it.
+    ///
+    /// The symbol is what tells this from the usage meter's number, which can
+    /// also be orange — colour alone would leave two orange numbers side by
+    /// side meaning different things. The symbol's colour is baked in with a
+    /// palette configuration because an attachment in an attributed title is
+    /// not tinted by the text's foreground colour.
+    static func needsYouBadge(count: Int) -> NSAttributedString {
+        guard let text = SessionBadge.text(count: count) else { return NSAttributedString(string: "") }
+        let badge = NSMutableAttributedString(string: " ")
+        let configuration = NSImage.SymbolConfiguration(pointSize: 11, weight: .bold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [needsYouColor]))
+        if let image = NSImage(
+            systemSymbolName: SessionStatus.needsYou.symbolName,
+            accessibilityDescription: SessionBadge.tooltip(count: count)
+        )?.withSymbolConfiguration(configuration) {
+            image.isTemplate = false
+            let attachment = NSTextAttachment()
+            attachment.image = image
+            attachment.bounds = NSRect(x: 0, y: -2, width: 13, height: 12)
+            badge.append(NSAttributedString(attachment: attachment))
+        }
+        badge.append(NSAttributedString(
+            string: " " + text,
+            attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize(for: .small), weight: .bold),
+                .foregroundColor: needsYouColor,
+            ]
+        ))
+        return badge
+    }
+
+    static let needsYouColor = NSColor.systemOrange
+
     static let meterSize = NSSize(width: 17, height: 11)
 
     /// Two stacked tracks — 5-hour above, weekly below — each filled to its

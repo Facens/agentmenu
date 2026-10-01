@@ -19,6 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The one instance, so the popover and the delegate open the same window.
     static private(set) weak var shared: AppDelegate?
 
+    /// The notification delegate goes on before launch completes (KTD15): a
+    /// click on a banner that launched the app is delivered to whoever is the
+    /// delegate by then, and with none it is dropped.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        environment.notifier.installDelegate()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         // Defaults first: a launcher that shows only $HOME until a wizard is
@@ -61,6 +68,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // It refuses to start on an alpha build or one with no signing key
         // and says why, in Settings and on stderr.
         _ = environment.updater
+        // Watching for sessions starts here, before the status item is built,
+        // so the item's first read of the badge count is already the count
+        // and not the zero it would start from (U5, KTD9). After `activate`,
+        // so the journal's observer is on the model before the first list.
+        // Before the sessions: the notifier reads the delivered notifications
+        // while the first registry list is on its way, and evaluates once both
+        // are in, whichever comes first.
+        environment.notifier.start()
+        environment.sessions.start()
         statusItem = StatusItemController(environment: environment)
         // After the status item, not before: the menu bar icon should
         // already be up by the time this steals focus (LaunchAtLoginPrompt's
@@ -72,6 +88,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         FinderTarget.warmUp()
 
 
+    }
+
+    /// Opens the popover on the Sessions tab, on Live or Closed: where a click
+    /// on a notification goes when there is a row to show or a session that has
+    /// ended.
+    func showSessions(mode: SessionsMode) {
+        statusItem?.showSessions(mode: mode)
     }
 
     /// Opens the settings window. A call, not a wish: the previous route asked

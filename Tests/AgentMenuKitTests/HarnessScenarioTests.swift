@@ -65,6 +65,198 @@ func runHarnessScenarioTests(_ t: TestRunner) {
     hs_testInstallAppValidation(t, root)
     hs_testAppFreshScreenRefusals(t, root)
     hs_testAppFreshJournalHelpersStillWork(t, root)
+    hs_testSessionsTabScenario(t, root)
+    hs_testOwnedLaunchScenario(t, root)
+}
+
+// MARK: - U11: the owned-launch scenario's own shape. It proves the hosted
+// launch on a guest with no signed-in Claude, so what it asserts has to come
+// from the journal and from the session host's own tmux, in that order, and
+// the part that closes the Terminal window is the one thing outside the
+// public vocabulary. Pinned statically here, like sessions-tab's.
+
+private func hs_testOwnedLaunchScenario(_ t: TestRunner, _ root: URL) {
+    let path = root.appendingPathComponent("harness/scenarios/agentmenu/owned-launch.sh").path
+    guard FileManager.default.isExecutableFile(atPath: path) else {
+        t.expect(false, "owned-launch.sh is missing or not executable at \(path)")
+        return
+    }
+    let syntax = runProcess("/bin/bash", ["-n", path])
+    t.expectEqual(syntax.status, 0, "owned-launch.sh parses — \(syntax.stderr)")
+    guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
+        t.expect(false, "read owned-launch.sh at \(path)")
+        return
+    }
+    let code = content.split(separator: "\n", omittingEmptySubsequences: false)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+
+    t.expect(
+        content.split(separator: "\n").contains { $0.hasPrefix("# HARNESS_STRANGER_ONLY") },
+        "owned-launch.sh declares HARNESS_STRANGER_ONLY: it clicks and closes a window, which only the stranger tier may do"
+    )
+    t.expect(
+        !code.contains { $0.contains("_scenario_") },
+        "owned-launch.sh uses the public scenario vocabulary only — scenario.sh is shared with MeetingHop, its underscore helpers are not an interface"
+    )
+    t.expect(code.contains { $0.hasPrefix("fixture agentmenu/owned-session ") }, "owned-launch.sh runs on the owned-session fixture, the one with keep_running on")
+
+    // Every event it waits for is one the app already journals: no new event
+    // was added for a scenario.
+    let known = Set(JournalEvent.allCases.map(\.rawValue))
+    var waitedFor: [String] = []
+    for line in code where line.contains("expect_event ") {
+        guard let open = line.range(of: "expect_event \""),
+              let close = line.range(of: "\"", range: open.upperBound..<line.endIndex) else { continue }
+        let name = String(line[open.upperBound..<close.lowerBound])
+        waitedFor.append(name)
+        t.expect(known.contains(name), "owned-launch.sh waits for '\(name)', which is not a JournalEvent")
+    }
+    t.expect(waitedFor.contains(JournalEvent.hostLaunch.rawValue), "owned-launch.sh waits for the app's own `host launch` event")
+
+    // Order: the host reports its session, the session and its client are read
+    // from tmux, the window is closed, and only then is the session expected
+    // to be alive with no client.
+    let hostLaunchAt = code.firstIndex { $0.contains("expect_event") && $0.contains("\"host launch\"") && $0.contains("terminal=terminal-app") && $0.contains("ok=true") }
+    let launchResultAt = code.firstIndex { $0.contains("expect_event") && $0.contains("\"launch result\"") }
+    let rowClickAt = code.firstIndex { $0.hasPrefix("click ") && $0.contains("popover.row.") && $0.hasSuffix(".launch\"") }
+    let sessionsAt = code.firstIndex { $0.hasPrefix("SESSIONS=") && $0.contains("list-sessions") }
+    let attachedAt = code.firstIndex { $0.contains("wait_for_clients 1 ") }
+    let windowCountAt = code.firstIndex { $0.contains("ax_window_count com.apple.Terminal") }
+    let closeAt = code.firstIndex { $0.hasPrefix("fixtures_guest_capture ") && $0.contains("$CLOSE_TERMINAL_WINDOWS") }
+    let detachedAt = code.lastIndex { $0.contains("wait_for_clients 0 ") }
+    let survivesAt = code.firstIndex { $0.hasPrefix("SESSIONS_AFTER=") && $0.contains("list-sessions") }
+    t.expect(hostLaunchAt != nil, "owned-launch.sh expects `host launch` with terminal=terminal-app ok=true")
+    t.expect(launchResultAt != nil, "owned-launch.sh expects the launch to have succeeded (`launch result`)")
+    t.expect(rowClickAt != nil, "owned-launch.sh clicks the folder row's launch control")
+    t.expect(sessionsAt != nil, "owned-launch.sh lists the hosted tmux sessions")
+    t.expect(attachedAt != nil, "owned-launch.sh waits for one attached client")
+    t.expect(windowCountAt != nil, "owned-launch.sh counts Terminal's windows through the public ax_window_count")
+    t.expect(closeAt != nil, "owned-launch.sh closes the Terminal window")
+    t.expect(detachedAt != nil, "owned-launch.sh waits for the client to go")
+    t.expect(survivesAt != nil, "owned-launch.sh lists the sessions again after the close")
+    if let rowClickAt, let hostLaunchAt, let sessionsAt, let attachedAt, let closeAt, let detachedAt, let survivesAt {
+        t.expect(rowClickAt < hostLaunchAt, "`host launch` is expected after the click that causes it")
+        t.expect(hostLaunchAt < sessionsAt, "the sessions are listed after the app said it created one")
+        t.expect(sessionsAt < attachedAt, "the attached client is read after the session was found")
+        t.expect(attachedAt < closeAt, "the window is closed only after the client was seen attached")
+        t.expect(closeAt < detachedAt && detachedAt < survivesAt, "survival is checked after the close, and after the client went")
+    }
+    if let windowCountAt, let closeAt {
+        t.expect(windowCountAt < closeAt, "the window count is taken while the window is still open")
+    }
+
+    // The session and its client are asked of the app's own helper copy and
+    // the app's own socket (`.../host/3.7c/tmux -S .../host/3.7c/s`), never a
+    // bare `tmux`, and the path's space is quoted for the guest's shell.
+    t.expect(content.contains("host/3.7c"), "owned-launch.sh addresses the app's versioned host directory")
+    t.expect(
+        code.contains { $0.contains(#"\"$HOST_DIR/tmux\" -S \"$HOST_DIR/s\""#) },
+        "owned-launch.sh runs the helper copy against the host's own socket, with the path quoted for the guest"
+    )
+    t.expect(
+        !code.contains { $0.contains("kill-server") || $0.contains("kill-session") },
+        "owned-launch.sh never kills a server or a session — the guest is discarded with them"
+    )
+    t.expect(
+        code.filter { $0.contains(#"-S \""#) }.count == 1 && !code.contains { $0.hasPrefix("tmux ") || $0.contains("$(tmux ") },
+        "owned-launch.sh reaches tmux only through host_tmux, which names the host's socket — never a bare tmux"
+    )
+    t.expect(code.contains { $0.contains("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}") }, "owned-launch.sh requires the session's name to be a lowercase UUID")
+    t.expect(
+        content.contains("CANNOT OBSERVE") && content.contains("Detached marker"),
+        "the header says what the scenario cannot observe without a signed-in Claude"
+    )
+}
+
+// MARK: - U5: the sessions-tab scenario's own shape. It is the one AgentMenu
+// scenario that plants a running process, so what keeps it honest is checked
+// statically here: it addresses the row by the key the app reported rather
+// than one it guessed, it reaches only the public scenario vocabulary, and no
+// fixture's apply.sh — which HarnessFixtureTests runs on whatever machine runs
+// the suite — starts a process of its own.
+
+private func hs_testSessionsTabScenario(_ t: TestRunner, _ root: URL) {
+    let path = root.appendingPathComponent("harness/scenarios/agentmenu/sessions-tab.sh").path
+    guard FileManager.default.isExecutableFile(atPath: path) else {
+        t.expect(false, "sessions-tab.sh is missing or not executable at \(path)")
+        return
+    }
+    let syntax = runProcess("/bin/bash", ["-n", path])
+    t.expectEqual(syntax.status, 0, "sessions-tab.sh parses — \(syntax.stderr)")
+    guard let content = try? String(contentsOfFile: path, encoding: .utf8) else {
+        t.expect(false, "read sessions-tab.sh at \(path)")
+        return
+    }
+    let code = content.split(separator: "\n", omittingEmptySubsequences: false)
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+
+    t.expect(
+        content.split(separator: "\n").contains { $0.hasPrefix("# HARNESS_STRANGER_ONLY") },
+        "sessions-tab.sh declares HARNESS_STRANGER_ONLY: it clicks, which only the stranger tier may do"
+    )
+    t.expect(
+        !code.contains { $0.contains("_scenario_") },
+        "sessions-tab.sh uses the public scenario vocabulary only — scenario.sh is shared with MeetingHop, its underscore helpers are not an interface"
+    )
+
+    let seenAt = code.firstIndex { $0.contains("expect_event") && $0.contains("session seen") }
+    let rowClickAt = code.firstIndex { $0.hasPrefix("click ") && $0.contains("popover.sessions.live.") }
+    t.expect(seenAt != nil, "sessions-tab.sh waits for the app's own `session seen` event")
+    t.expect(rowClickAt != nil, "sessions-tab.sh clicks a live row by its identifier")
+    if let seenAt, let rowClickAt {
+        t.expect(seenAt < rowClickAt, "the row is addressed by the key from `session seen`, which has to have arrived first")
+    }
+    t.expect(
+        !code.contains { $0.contains("popover.sessions.live.") && !$0.contains("$ROW_KEY") },
+        "no live-row identifier is spelled out: the key is the app's, from the journal"
+    )
+
+    // U5/U6: the scenario claims a Needs-you group, a badge and a focus, and
+    // each needs an observable of its own — the `session seen` event is
+    // written from the raw list, before any grouping, badge or focus work, so
+    // it cannot vouch for any of them. Pinned in the order they must happen.
+    let badgeAt = code.firstIndex { $0.contains("expect_event") && $0.contains("\"badge changed\"") && $0.contains("count=1") }
+    let headerID = AccessibilityID.Popover.Sessions.needsYouHeader
+    let groupAt = code.firstIndex { $0.hasPrefix("agentmenu_wait_for_identifier ") && $0.contains("\"\(headerID)\"") }
+    let focusAt = code.firstIndex {
+        $0.contains("expect_event") && $0.contains("\"focus result\"") && $0.contains("key=\"$ROW_KEY\"")
+            && $0.contains("outcome=unavailable") && $0.contains("reason=noTTY")
+    }
+    t.expect(badgeAt != nil, "sessions-tab.sh waits for the menu-bar badge to say 1 (`badge changed count=1`)")
+    t.expect(groupAt != nil, "sessions-tab.sh waits for the Needs-you heading's identifier \(headerID), spelled as AccessibilityID spells it")
+    t.expect(focusAt != nil, "sessions-tab.sh expects the click's `focus result` for its own row: unavailable, noTTY")
+    if let seenAt, let badgeAt, let groupAt, let rowClickAt, let focusAt {
+        t.expect(seenAt < badgeAt, "the badge is expected after the session was seen")
+        t.expect(groupAt < rowClickAt, "the group's heading is waited for before the row is clicked")
+        t.expect(rowClickAt < focusAt, "the focus result is expected after the click that causes it")
+    }
+    t.expect(
+        !content.contains("stub in U5") && !content.contains("is a stub"),
+        "the header no longer calls the row click a stub: focus is real (U6)"
+    )
+    // The helper the scenario waits with is AgentMenu's own, in the fixtures
+    // library every scenario already sources, not a scenario.sh internal.
+    let lib = (try? String(contentsOf: root.appendingPathComponent("harness/fixtures/agentmenu/_lib.sh"), encoding: .utf8)) ?? ""
+    t.expect(lib.contains("agentmenu_wait_for_identifier()"), "_lib.sh defines agentmenu_wait_for_identifier")
+
+    // No fixture starts a process. `_plant-session.sh` does, from a scenario,
+    // on purpose, and is not a fixture: it is not `<name>/apply.sh`.
+    let fixtures = root.appendingPathComponent("harness/fixtures/agentmenu")
+    let names = ((try? FileManager.default.contentsOfDirectory(atPath: fixtures.path)) ?? []).sorted()
+    var applyScripts = 0
+    for name in names {
+        let apply = fixtures.appendingPathComponent("\(name)/apply.sh").path
+        guard let text = try? String(contentsOfFile: apply, encoding: .utf8) else { continue }
+        applyScripts += 1
+        let spawns = text.split(separator: "\n").contains { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.hasPrefix("#") && (trimmed.contains("nohup") || trimmed.contains("sleep ") || trimmed.hasSuffix("&"))
+        }
+        t.expect(!spawns, "agentmenu/\(name)/apply.sh starts no process: HarnessFixtureTests runs it on the machine running the suite")
+    }
+    t.expect(applyScripts >= 4, "the fixture discovery found the apply.sh scripts — got \(applyScripts)")
 }
 
 // MARK: - scenario.sh parses; both smoke scenarios exist, parse, are

@@ -3,14 +3,16 @@
 
 import Foundation
 
-/// The five KTD4 escape hatches, read in one place instead of at each call
-/// site: `AGENTMENU_CONFIG`, `AGENTMENU_MANIFESTS_USER_ROOT`,
+/// The seven escape hatches, read in one place instead of at each call site:
+/// the five KTD4 ones — `AGENTMENU_CONFIG`, `AGENTMENU_MANIFESTS_USER_ROOT`,
 /// `AGENTMENU_PROFILE_ROOT`, `AGENTMENU_DEFAULTS_SUITE` and
-/// `AGENTMENU_HARNESS_DIR`. Every field is nil unless the corresponding
-/// variable is set to a non-empty value, which is what "nothing changes when
-/// no variable is set" (KTD4) means in code: a caller that gets an all-nil
-/// `Overrides` back falls through to exactly the defaults it used before
-/// this type existed.
+/// `AGENTMENU_HARNESS_DIR` — `AGENTMENU_SESSION_STORE`, which the session
+/// manager's app-owned store (KTD12) added, and `AGENTMENU_SESSION_HOST_DIR`,
+/// which the session host (KTD4) added. Every field is nil
+/// unless the corresponding variable is set to a non-empty value, which is
+/// what "nothing changes when no variable is set" (KTD4) means in code: a
+/// caller that gets an all-nil `Overrides` back falls through to exactly the
+/// defaults it used before this type existed.
 ///
 /// Two factories, not one, because the two processes that read these
 /// variables cross different trust boundaries:
@@ -42,19 +44,32 @@ public struct Overrides: Equatable {
     public var defaultsSuite: String?
     /// `AGENTMENU_HARNESS_DIR` — replaces `Journal.defaultDirectory`.
     public var harnessDirectory: URL?
+    /// `AGENTMENU_SESSION_STORE` — replaces `SessionStore.defaultURL`. A file
+    /// path, like `AGENTMENU_CONFIG`, not a directory: the store is one file.
+    public var sessionStore: URL?
+    /// `AGENTMENU_SESSION_HOST_DIR` — replaces the versioned session host
+    /// directory (`SessionHostLocation.resolve`). A directory: the host's
+    /// socket, tmux config and helper copies all live inside it, so one
+    /// override moves every path and the harness never reaches a real server.
+    /// It must be short — the socket inside it has a 104-byte path limit.
+    public var sessionHostDirectory: URL?
 
     public init(
         config: URL? = nil,
         manifestsUserRoot: URL? = nil,
         profileRoot: URL? = nil,
         defaultsSuite: String? = nil,
-        harnessDirectory: URL? = nil
+        harnessDirectory: URL? = nil,
+        sessionStore: URL? = nil,
+        sessionHostDirectory: URL? = nil
     ) {
         self.config = config
         self.manifestsUserRoot = manifestsUserRoot
         self.profileRoot = profileRoot
         self.defaultsSuite = defaultsSuite
         self.harnessDirectory = harnessDirectory
+        self.sessionStore = sessionStore
+        self.sessionHostDirectory = sessionHostDirectory
     }
 
     /// The key the argument domain carries. `-AgentMenuHarness YES` on the
@@ -78,14 +93,16 @@ public struct Overrides: Equatable {
 
     /// Unconditional: no flag, no gate. The CLI's long-standing behaviour,
     /// extended from the two variables `resolvedConfigURL()` and
-    /// `resolvedManifestUserRoot()` used to read separately to all five.
+    /// `resolvedManifestUserRoot()` used to read separately to all seven.
     public static func forCLI(environment: [String: String] = ProcessInfo.processInfo.environment) -> Overrides {
         Overrides(
             config: url(environment, "AGENTMENU_CONFIG"),
             manifestsUserRoot: url(environment, "AGENTMENU_MANIFESTS_USER_ROOT"),
             profileRoot: url(environment, "AGENTMENU_PROFILE_ROOT"),
             defaultsSuite: nonEmpty(environment, "AGENTMENU_DEFAULTS_SUITE"),
-            harnessDirectory: url(environment, "AGENTMENU_HARNESS_DIR")
+            harnessDirectory: url(environment, "AGENTMENU_HARNESS_DIR"),
+            sessionStore: url(environment, "AGENTMENU_SESSION_STORE"),
+            sessionHostDirectory: url(environment, "AGENTMENU_SESSION_HOST_DIR")
         )
     }
 
@@ -97,7 +114,7 @@ public struct Overrides: Equatable {
     /// `~/Library/Preferences`, persisted by an earlier `defaults write`)
     /// open the gate instead of an actual launch argument. Once the gate is
     /// open, every field is read exactly as `forCLI` reads it — one
-    /// implementation of "read the five variables", not two that could
+    /// implementation of "read the seven variables", not two that could
     /// drift apart.
     public static func forGUI(
         defaults: UserDefaults = .standard,

@@ -116,3 +116,27 @@ fx_git_checkout() {
     printf 'synthetic checkout planted by the first-run harness fixture — never a real repository.\n' \
         > "$dir/README"
 }
+
+# agentmenu_wait_for_identifier <bundle-id> <identifier>
+#
+# Waits, bounded, for an element to exist — without pressing it. Host-side,
+# for a scenario, unlike everything above; it lives here and not in
+# harness/lib/scenario.sh because that file is shared byte-for-byte with
+# MeetingHop (harness/SHARED.sha256) and its public vocabulary has no
+# "wait for this" that is not also a click. Nothing is pressed because what
+# the sessions-tab scenario needs is a heading, which is text.
+#
+# One line over scenario.sh's own `_scenario_await_element` — the poll
+# `click` runs before it presses — so the bound, the failure (a screenshot,
+# then a scenario failure, never a harness error) and the wait for a SwiftUI
+# view to reach the accessibility tree are exactly `click`'s. The dependence
+# on a scenario.sh internal is this one line, on purpose: HarnessScenarioTests
+# keeps the scenarios themselves to the public vocabulary, and the day
+# scenario.sh grows a public wait, this becomes a call to it.
+agentmenu_wait_for_identifier() {
+    local bundle="${1:?agentmenu_wait_for_identifier requires a bundle id.}"
+    local identifier="${2:?agentmenu_wait_for_identifier requires an identifier.}"
+    _scenario_refuse_screen "agentmenu_wait_for_identifier"
+    _scenario_await_element "$bundle" "$identifier"
+    log "found $identifier on $bundle"
+}

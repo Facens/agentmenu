@@ -719,4 +719,198 @@ func runCommandBuilderTests(_ t: TestRunner) {
             "the message names where the permission lives"
         )
     }
+
+    // MARK: 25. `--resume <id>` (U5 step 4a, KTD14)
+
+    do {
+        let dir = TempDir("resume-dir")
+        defer { dir.cleanup() }
+        let folderPath = dir.path("project")
+        t.expectNoThrow("create the project folder") {
+            try FileManager.default.createDirectory(atPath: folderPath, withIntermediateDirectories: true)
+        }
+        let sessionID = "0b6f3a52-7c1e-4d0a-9a43-5f1e2c7d8b90"
+
+        if let claudeCode = claudeCodeManifest {
+            let profile = Profile(id: "work", name: "Work", configDirectory: "/Users/x/.claude-work")
+            let preset = Preset(model: "opus", effort: "high", permissionMode: "plan", advisor: .off)
+            let built = t.attempt("build a resume with a whole preset") {
+                try CommandBuilder.build(
+                    agent: claudeCode, resolved: resolved(preset), profile: profile,
+                    directory: folderPath, binaryPath: "/usr/local/bin/claude", resumeSessionID: sessionID
+                )
+            }
+            if let command = built {
+                t.expectEqual(
+                    command.arguments,
+                    [
+                        "--resume", sessionID,
+                        "--model", "opus",
+                        "--effort", "high",
+                        "--permission-mode", "plan",
+                        "--settings", "{\"advisorModel\":\"\"}",
+                    ],
+                    "the resume pair comes after the account and before the preset, and the whole preset is re-passed"
+                )
+                t.expectEqual(
+                    command.environment, ["CLAUDE_CONFIG_DIR": "/Users/x/.claude-work"],
+                    "a resume still selects the account through the environment"
+                )
+                t.expect(!command.arguments.contains("--session-id"), "a resume never carries --session-id (KTD14)")
+                t.expect(
+                    command.shellCommand.contains("'--resume' '\(sessionID)'"),
+                    "the id is its own quoted argv element in the shell command"
+                )
+            }
+
+            // With no `resumeSessionID` the output is what it always was.
+            let plain = t.attempt("build without a resume") {
+                try CommandBuilder.build(
+                    agent: claudeCode, resolved: resolved(preset), profile: profile,
+                    directory: folderPath, binaryPath: "/usr/local/bin/claude"
+                )
+            }
+            t.expect(plain.map { !$0.arguments.contains("--resume") } ?? false, "no resume id, no --resume")
+
+            // The id is validated: nothing odd is ever typed into a terminal.
+            for bad in [
+                "", "abc", "--dangerously-skip-permissions", "../../etc/passwd",
+                "0b6f3a52-7c1e-4d0a-9a43-5f1e2c7d8b90; rm -rf ~",
+                "0b6f3a52-7c1e-4d0a-9a43-5f1e2c7d8b9", "0B6F3A52-7C1E-4D0A-9A43-5F1E2C7D8B90",
+                "0b6f3a52-7c1e-4d0a-9a43-5f1e2c7d8b90\n", "0b6f3a527c1e4d0a9a435f1e2c7d8b90",
+            ] {
+                var thrown: CommandBuilderError?
+                do {
+                    _ = try CommandBuilder.build(
+                        agent: claudeCode, resolved: resolved(preset), profile: profile,
+                        directory: folderPath, binaryPath: "/usr/local/bin/claude", resumeSessionID: bad
+                    )
+                } catch let error as CommandBuilderError {
+                    thrown = error
+                } catch {}
+                if case .invalidSessionID? = thrown {
+                    t.expect(!(thrown?.description ?? "").contains(bad) || bad.isEmpty,
+                             "the refusal of \(bad.debugDescription) does not echo it")
+                } else {
+                    t.expect(false, "\(bad.debugDescription) is refused as an invalid session id, got \(String(describing: thrown))")
+                }
+            }
+        }
+
+        // Only Claude Code is known to resume by id.
+        t.expectThrows("an agent other than Claude Code refuses a resume") {
+            try CommandBuilder.build(
+                agent: shapeAgent(),
+                resolved: resolved(Preset()),
+                profile: Profile(id: "p", name: "P", configDirectory: "/Users/x/.shapecheck"),
+                directory: folderPath, binaryPath: "/usr/local/bin/shapecheck", resumeSessionID: sessionID
+            )
+        }
+    }
+
+    // MARK: 26. `--session-id <id>` (U11, KTD7, KTD14)
+
+    do {
+        let dir = TempDir("session-id-dir")
+        defer { dir.cleanup() }
+        let folderPath = dir.path("project")
+        t.expectNoThrow("create the project folder") {
+            try FileManager.default.createDirectory(atPath: folderPath, withIntermediateDirectories: true)
+        }
+        let pinned = "5d1c7e0a-3b6e-4d7a-9c21-0e0b7a4d1f33"
+
+        if let claudeCode = claudeCodeManifest {
+            let profile = Profile(id: "work", name: "Work", configDirectory: "/Users/x/.claude-work")
+            let preset = Preset(model: "opus", effort: "high", permissionMode: "plan", advisor: .off)
+            let built = t.attempt("build a pinned fresh launch") {
+                try CommandBuilder.build(
+                    agent: claudeCode, resolved: resolved(preset), profile: profile,
+                    directory: folderPath, binaryPath: "/usr/local/bin/claude", sessionID: pinned
+                )
+            }
+            if let command = built {
+                t.expectEqual(
+                    command.arguments,
+                    [
+                        "--session-id", pinned,
+                        "--model", "opus",
+                        "--effort", "high",
+                        "--permission-mode", "plan",
+                        "--settings", "{\"advisorModel\":\"\"}",
+                    ],
+                    "the pin sits where --resume does: after the account, before the preset"
+                )
+                t.expect(!command.arguments.contains("--resume"), "a pinned fresh launch never carries --resume")
+                t.expect(command.shellCommand.contains("'--session-id' '\(pinned)'"), "the id is its own quoted argv element")
+
+                // `resolve --command` prints the launched command without the pin.
+                let unpinned = t.attempt("build the same launch without a pin") {
+                    try CommandBuilder.build(
+                        agent: claudeCode, resolved: resolved(preset), profile: profile,
+                        directory: folderPath, binaryPath: "/usr/local/bin/claude"
+                    )
+                }
+                var stripped = command.arguments
+                if let at = stripped.firstIndex(of: "--session-id") { stripped.removeSubrange(at...(at + 1)) }
+                t.expectEqual(stripped, unpinned?.arguments ?? [], "the only difference from `resolve --command` is the --session-id pair")
+                t.expectEqual(command.environment, unpinned?.environment ?? [:], "…and the environment is the same")
+            }
+
+            // The owned path: a fresh launch is pinned to its launch id, a restore never is.
+            let launchID = LaunchLedger.newLaunchID()
+            let fresh = t.attempt("an owned fresh launch") {
+                try OwnedLauncher.command(
+                    agent: claudeCode, resolved: resolved(preset), profile: profile, directory: folderPath,
+                    binaryPath: "/usr/local/bin/claude", kind: .fresh, launchID: launchID
+                )
+            }
+            if let fresh {
+                let at = fresh.arguments.firstIndex(of: "--session-id")
+                t.expectEqual(at.map { fresh.arguments[$0 + 1] }, launchID, "an owned fresh launch is pinned to its launch id")
+            }
+            let restore = t.attempt("an owned restore") {
+                try OwnedLauncher.command(
+                    agent: claudeCode, resolved: resolved(preset), profile: profile, directory: folderPath,
+                    binaryPath: "/usr/local/bin/claude", kind: .restore(resumedSessionID: pinned), launchID: launchID
+                )
+            }
+            if let restore {
+                let at = restore.arguments.firstIndex(of: "--resume")
+                t.expectEqual(at.map { restore.arguments[$0 + 1] }, pinned, "a restore through the owned path carries --resume <id>")
+                t.expect(!restore.arguments.contains("--session-id"), "…and never --session-id (KTD14)")
+                t.expect(!restore.arguments.contains(launchID), "…and the launch id appears nowhere in it")
+                t.expect(restore.arguments.contains("--model"), "…with the whole preset re-passed")
+            }
+
+            // Refusals.
+            t.expectThrows("a pin and a resume together are refused") {
+                try CommandBuilder.build(
+                    agent: claudeCode, resolved: resolved(preset), profile: profile, directory: folderPath,
+                    binaryPath: "/usr/local/bin/claude", resumeSessionID: pinned, sessionID: pinned
+                )
+            }
+            for bad in ["", "abc", "5D1C7E0A-3B6E-4D7A-9C21-0E0B7A4D1F33", "--model", pinned + "\n"] {
+                var thrown: CommandBuilderError?
+                do {
+                    _ = try CommandBuilder.build(
+                        agent: claudeCode, resolved: resolved(preset), profile: profile, directory: folderPath,
+                        binaryPath: "/usr/local/bin/claude", sessionID: bad
+                    )
+                } catch let error as CommandBuilderError { thrown = error } catch {}
+                if case .invalidPinnedSessionID? = thrown {
+                    t.expect(true, "\(bad.debugDescription) is refused as a pinned id")
+                } else {
+                    t.expect(false, "\(bad.debugDescription) is refused as a pinned id, got \(String(describing: thrown))")
+                }
+            }
+        }
+        t.expectThrows("an agent other than Claude Code cannot be pinned") {
+            try CommandBuilder.build(
+                agent: shapeAgent(),
+                resolved: resolved(Preset()),
+                profile: Profile(id: "p", name: "P", configDirectory: "/Users/x/.shapecheck"),
+                directory: folderPath, binaryPath: "/usr/local/bin/shapecheck", sessionID: pinned
+            )
+        }
+    }
 }

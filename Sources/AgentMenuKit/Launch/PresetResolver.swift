@@ -6,7 +6,7 @@ import Foundation
 /// One field of a `Preset`, named so an `UnsupportedValue` can say which one
 /// it is about.
 public enum PresetField: String, CaseIterable, Equatable {
-    case agent, terminal, profile, model, effort, permissionMode, advisor
+    case agent, terminal, profile, model, effort, permissionMode, advisor, keepRunning
 }
 
 /// A preset value the active agent's manifest does not declare (R13):
@@ -52,10 +52,35 @@ public struct ResolvedPreset: Equatable {
     public let unsupported: [UnsupportedValue]
     public let adjusted: [AdjustedValue]
 
+    /// The effective "keep running when window closes" value (R15): `true` or
+    /// `false` once the three layers and the default are merged, `nil` when
+    /// the agent or terminal cannot keep a session running ("not applicable",
+    /// also recorded in `adjusted`). Carried and displayed only — nothing
+    /// launches differently because of it yet.
+    public var keepRunning: Bool? { preset.keepRunning }
+
     public init(preset: Preset, unsupported: [UnsupportedValue], adjusted: [AdjustedValue] = []) {
         self.preset = preset
         self.unsupported = unsupported
         self.adjusted = adjusted
+    }
+}
+
+/// Which agent and terminal pairs can keep a session running after its window
+/// closes (R15). Every place that asks the question asks it here.
+///
+/// There is no "supports attach" capability on a terminal manifest yet, so
+/// the answer is a fixed list of manifest ids: Terminal.app and iTerm2, and
+/// Claude Code as the agent. A later unit replaces `terminalIDs` with a
+/// manifest capability; nothing else needs to change.
+public enum KeepRunningSupport {
+    public static let agentIDs: Set<String> = [RegistryReader.claudeAgentID]
+    public static let terminalIDs: Set<String> = ["terminal-app", "iterm2"]
+
+    /// A `nil` terminal is a launch with nowhere to run, so it is unsupported.
+    public static func supports(agentID: String, terminalID: String?) -> Bool {
+        guard let terminalID else { return false }
+        return agentIDs.contains(agentID) && terminalIDs.contains(terminalID)
     }
 }
 
@@ -78,8 +103,23 @@ public enum PresetResolver {
     /// field order — model, effort, permission mode, advisor — deterministic
     /// rather than an accident of iteration order, since a caller (the CLI's
     /// `resolve` command) renders this list to the user.
-    public static func resolve(global: Preset, folder: Preset, oneShot: Preset, agent: AgentManifest?) -> ResolvedPreset {
+    ///
+    /// `terminalID` is the terminal the launch will actually use, for a
+    /// caller whose choice does not come from the merged preset alone (the
+    /// app falls back to the first usable terminal); nil uses the merged
+    /// preset's own `terminal`. It only decides whether keep-running applies.
+    ///
+    /// Keep-running is the one field that always ends up set: the merged
+    /// value, else `Preset.keepRunningDefault`. With no agent to check it is
+    /// left at that value; with an agent and terminal that cannot keep a
+    /// session running it becomes nil ("not applicable") and is recorded in
+    /// `adjusted` as from its effective value to "not applicable".
+    public static func resolve(
+        global: Preset, folder: Preset, oneShot: Preset, agent: AgentManifest?, terminalID: String? = nil
+    ) -> ResolvedPreset {
         var merged = global.overlaid(with: folder).overlaid(with: oneShot)
+        let requestedKeepRunning = merged.keepRunning ?? Preset.keepRunningDefault
+        merged.keepRunning = requestedKeepRunning
         guard let agent else {
             return ResolvedPreset(preset: merged, unsupported: [], adjusted: [])
         }
@@ -178,6 +218,18 @@ public enum PresetResolver {
                 to: raised,
                 reason: "\(agent.id) refuses an advisor weaker than the main model, and '\(advisorModel)' "
                     + "ranks below '\(model)'"
+            ))
+        }
+
+        let effectiveTerminal = terminalID ?? merged.terminal
+        if !KeepRunningSupport.supports(agentID: agent.id, terminalID: effectiveTerminal) {
+            merged.keepRunning = nil
+            adjusted.append(AdjustedValue(
+                field: .keepRunning,
+                from: requestedKeepRunning ? "on" : "off",
+                to: "not applicable",
+                reason: "keeping a session running needs Claude Code in Terminal or iTerm2, and this launch is "
+                    + "\(agent.id) in \(effectiveTerminal ?? "no terminal")"
             ))
         }
 

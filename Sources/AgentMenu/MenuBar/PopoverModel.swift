@@ -57,6 +57,10 @@ final class PopoverModel: ObservableObject {
     @Published private(set) var launching: String?
     @Published var pendingGlobalSave: Preset?
 
+    /// Launch or Sessions. Never persisted: the popover opens on Launch every
+    /// time (KTD16), and `popoverWillOpen` is where that is enforced.
+    @Published private(set) var tab: PopoverTab = PopoverTab.onOpen
+
     /// One-shot overrides, keyed by target id. Discarded on launch unless saved (R9).
     @Published private(set) var oneShot: [String: Preset] = [:]
 
@@ -195,6 +199,7 @@ final class PopoverModel: ObservableObject {
         if own.effort != nil || shot.effort != nil { fields.insert(.effort) }
         if own.permissionMode != nil || shot.permissionMode != nil { fields.insert(.permissionMode) }
         if own.advisor != nil || shot.advisor != nil { fields.insert(.advisor) }
+        if own.keepRunning != nil || shot.keepRunning != nil { fields.insert(.keepRunning) }
         if own.agent != nil || shot.agent != nil { fields.insert(.agent) }
         if own.terminal != nil || shot.terminal != nil { fields.insert(.terminal) }
         return fields
@@ -219,6 +224,34 @@ final class PopoverModel: ObservableObject {
     /// would hide the danger.
     func bypasses(_ target: LaunchTarget) -> Bool {
         state(for: target).bypasses
+    }
+
+    // MARK: Tabs (U5)
+
+    /// The sessions the Sessions tab lists. Exposed rather than observed
+    /// here: a status change every few seconds must not re-render the Launch
+    /// list, whose rows each resolve a preset, so the views that show
+    /// sessions observe this model themselves.
+    var sessions: SessionsModel { environment.sessions }
+
+    func selectTab(_ tab: PopoverTab) {
+        guard tab != self.tab else { return }
+        self.tab = tab
+        if tab == .sessions { environment.sessions.sessionsTabOpened() }
+    }
+
+    /// Called as the popover is about to be shown. Puts the tab, the pill, the
+    /// Live/Closed choice and the search back to what an open shows — here
+    /// and not in `refresh()`, which `setActiveProfile` and a configuration
+    /// reload also call: a Settings save must not send someone back to Launch.
+    func popoverWillOpen() {
+        tab = PopoverTab.onOpen
+        environment.sessions.popoverWillOpen()
+        refresh()
+    }
+
+    func popoverDidClose() {
+        environment.sessions.popoverDidClose()
     }
 
     // MARK: Intents

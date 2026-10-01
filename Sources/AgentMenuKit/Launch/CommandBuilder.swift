@@ -38,7 +38,7 @@ public enum ShellQuoting {
 /// A resolved launch: an absolute-path executable, an argv vector, an
 /// environment dictionary, and the working directory (KTD4 — never a shell
 /// alias, because a GUI app inherits neither `~/.zshrc` nor `~/.local/bin`).
-public struct LaunchCommand: Equatable {
+public struct LaunchCommand: Equatable, Sendable {
     public let executable: String
     public let arguments: [String]
     public let environment: [String: String]
@@ -89,6 +89,21 @@ public enum CommandBuilderError: Error, CustomStringConvertible {
     /// The manifest declares a profile mechanism (`profile_env` /
     /// `profile_flag`) but no `Profile` was supplied to carry it.
     case profileRequired(agent: String)
+    /// `resumeSessionID` is not a session id. Deliberately does not echo the
+    /// value: it is the one thing that was refused for being odd, and the
+    /// message goes to a terminal or a dialog.
+    case invalidSessionID
+    /// Resuming by id is only known for Claude Code.
+    case resumeUnsupported(agent: String)
+    /// `sessionID` is not a session id. Does not echo the value, for the
+    /// reason `invalidSessionID` does not.
+    case invalidPinnedSessionID
+    /// Pinning a session id is only known for Claude Code.
+    case pinUnsupported(agent: String)
+    /// A launch either starts a session under an id AgentMenu chose or resumes
+    /// one; Claude Code refuses both flags together unless the session is
+    /// forked, and a fork would not be the session that was asked for.
+    case pinAndResume
 
     public var description: String {
         switch self {
@@ -98,6 +113,16 @@ public enum CommandBuilderError: Error, CustomStringConvertible {
             return "the folder '\(path)' does not exist"
         case .profileRequired(let agent):
             return "\(agent) requires a profile, but none was given"
+        case .invalidSessionID:
+            return "that is not a session id, so it cannot be resumed"
+        case .resumeUnsupported(let agent):
+            return "\(agent) cannot resume a session by id"
+        case .invalidPinnedSessionID:
+            return "that is not a session id, so a session cannot be started under it"
+        case .pinUnsupported(let agent):
+            return "\(agent) cannot start a session under a chosen id"
+        case .pinAndResume:
+            return "a launch cannot both start a new session id and resume one"
         }
     }
 }
@@ -105,18 +130,50 @@ public enum CommandBuilderError: Error, CustomStringConvertible {
 /// Turns a launch target plus its resolved preset into a `LaunchCommand`
 /// (R4, R7, R8, R9, R13, R22) — the product's core transform.
 public enum CommandBuilder {
+    /// Claude Code's flag for resuming a session by id. Fixed here rather than
+    /// read from the manifest because only Claude Code is known to resume this
+    /// way, and `build` refuses any other agent.
+    static let resumeFlag = "--resume"
+    /// Claude Code's flag for starting a session under an id the caller chose
+    /// (U11): AgentMenu pins every launch it makes to a fresh UUID, which is
+    /// also the launch's id in the ledger, so the registry row that appears
+    /// can be matched to it (KTD7).
+    static let sessionIDFlag = "--session-id"
+
     /// Flag order is stable and documented because `agentmenu resolve
-    /// --command` must print exactly what the popover launches: any
+    /// --command` must print what the popover launches: any
     /// `profileMechanism == .flag` argument first (a profile is an account,
-    /// selected before anything else), then model, effort, permission mode,
-    /// advisor, the manifest's static `extraArgs`, and finally the project
-    /// path when `projectArgument == .positional`.
+    /// selected before anything else), then which session — `--resume <id>`
+    /// when one is being resumed, or `--session-id <id>` when AgentMenu pins a
+    /// new one (which session comes right after which account, and before how
+    /// it runs, and the two never appear together) — then model, effort,
+    /// permission mode, advisor, the manifest's static `extraArgs`, and finally
+    /// the project path when `projectArgument == .positional`.
+    ///
+    /// **`resolve --command` and `--session-id`.** Every fresh launch from the
+    /// app is pinned to a new random UUID, which cannot be reproduced by a
+    /// command that runs outside it. So `agentmenu resolve --command` calls
+    /// this without `sessionID`, and its output is the launched command minus
+    /// that one `--session-id <uuid>` pair — the only per-launch difference.
+    /// (Printing a fresh UUID instead would make every call differ from the
+    /// last and match no launch the app ever made.) A resume never carries it.
+    ///
+    /// A resume re-passes the whole preset (KTD14): Claude Code does not
+    /// remember a session's model, effort or permission mode, so a resumed
+    /// session that dropped them would silently run on the profile's defaults.
+    /// It never carries `--session-id` — Claude Code refuses that beside
+    /// `--resume` unless the session is forked, and this builder does not
+    /// fork. `resumeSessionID` must be the canonical UUID
+    /// (`SessionIdentifier.isValid`) and travels as its own argv element, so
+    /// nothing in it can be read as a second flag or shell syntax.
     public static func build(
         agent: AgentManifest,
         resolved: ResolvedPreset,
         profile: Profile?,
         directory: String,
-        binaryPath: String
+        binaryPath: String,
+        resumeSessionID: String? = nil,
+        sessionID: String? = nil
     ) throws -> LaunchCommand {
         var isDirectory: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory)
@@ -125,6 +182,23 @@ public enum CommandBuilder {
         }
         guard !binaryPath.isEmpty else {
             throw CommandBuilderError.binaryNotResolved(agent.binary)
+        }
+        if let resumeSessionID {
+            guard agent.id == RegistryReader.claudeAgentID else {
+                throw CommandBuilderError.resumeUnsupported(agent: agent.id)
+            }
+            guard SessionIdentifier.isValid(resumeSessionID) else {
+                throw CommandBuilderError.invalidSessionID
+            }
+        }
+        if let sessionID {
+            guard resumeSessionID == nil else { throw CommandBuilderError.pinAndResume }
+            guard agent.id == RegistryReader.claudeAgentID else {
+                throw CommandBuilderError.pinUnsupported(agent: agent.id)
+            }
+            guard SessionIdentifier.isValid(sessionID) else {
+                throw CommandBuilderError.invalidPinnedSessionID
+            }
         }
 
         var environment: [String: String] = [:]
@@ -140,6 +214,14 @@ public enum CommandBuilder {
             arguments.append(profile.expandedConfigDirectory.path)
         case .none:
             break
+        }
+
+        if let resumeSessionID {
+            arguments.append(resumeFlag)
+            arguments.append(resumeSessionID)
+        } else if let sessionID {
+            arguments.append(sessionIDFlag)
+            arguments.append(sessionID)
         }
 
         let preset = resolved.preset

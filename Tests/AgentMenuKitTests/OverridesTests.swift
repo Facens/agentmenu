@@ -53,7 +53,7 @@ private func resetArgumentDomain() {
 func runOverridesTests(_ t: TestRunner) {
     t.suite("Overrides")
 
-    // MARK: - 1. forCLI: unconditional, all five variables, tilde-expanded.
+    // MARK: - 1. forCLI: unconditional, all six variables, tilde-expanded.
     // No flag needed — this is `resolvedConfigURL()`'s and
     // `resolvedManifestUserRoot()`'s own long-standing behaviour, now shared.
 
@@ -64,6 +64,7 @@ func runOverridesTests(_ t: TestRunner) {
             "AGENTMENU_PROFILE_ROOT": "/tmp/agentmenu-overrides-test/profiles",
             "AGENTMENU_DEFAULTS_SUITE": "dev.facens.agentmenu.harness-test",
             "AGENTMENU_HARNESS_DIR": "/tmp/agentmenu-overrides-test/harness",
+            "AGENTMENU_SESSION_STORE": "/tmp/agentmenu-overrides-test/sessions.json",
         ]
         let overrides = Overrides.forCLI(environment: env)
         t.expectEqual(overrides.config?.path, "/tmp/agentmenu-overrides-test/config.toml", "AGENTMENU_CONFIG is read unconditionally")
@@ -71,6 +72,7 @@ func runOverridesTests(_ t: TestRunner) {
         t.expectEqual(overrides.profileRoot?.path, "/tmp/agentmenu-overrides-test/profiles", "AGENTMENU_PROFILE_ROOT is read unconditionally")
         t.expectEqual(overrides.defaultsSuite, "dev.facens.agentmenu.harness-test", "AGENTMENU_DEFAULTS_SUITE is read unconditionally")
         t.expectEqual(overrides.harnessDirectory?.path, "/tmp/agentmenu-overrides-test/harness", "AGENTMENU_HARNESS_DIR is read unconditionally")
+        t.expectEqual(overrides.sessionStore?.path, "/tmp/agentmenu-overrides-test/sessions.json", "AGENTMENU_SESSION_STORE is read unconditionally")
     })()
 
     // A `~`-prefixed value is tilde-expanded, matching `resolvedConfigURL()`'s
@@ -84,7 +86,7 @@ func runOverridesTests(_ t: TestRunner) {
         )
     })()
 
-    // MARK: - 2. forCLI: with none of the five variables set, every field is
+    // MARK: - 2. forCLI: with none of the six variables set, every field is
     // nil — the "nothing changes when no variable is set" half of KTD4.
 
     ({
@@ -98,6 +100,81 @@ func runOverridesTests(_ t: TestRunner) {
     ({
         let overrides = Overrides.forCLI(environment: ["AGENTMENU_CONFIG": ""])
         t.expect(overrides.config == nil, "an empty AGENTMENU_CONFIG is treated as unset, not as the current directory")
+    })()
+
+    // The session store key (KTD12): nil unless set, tilde-expanded like its
+    // siblings, treated as absent when empty, and — being a file path — kept
+    // exactly as given rather than treated as a directory.
+    ({
+        t.expect(Overrides.forCLI(environment: [:]).sessionStore == nil, "AGENTMENU_SESSION_STORE is nil unless set")
+        t.expect(
+            Overrides.forCLI(environment: ["AGENTMENU_SESSION_STORE": ""]).sessionStore == nil,
+            "an empty AGENTMENU_SESSION_STORE is treated as unset"
+        )
+        let expandedHome = FileManager.default.homeDirectoryForCurrentUser.path
+        t.expectEqual(
+            Overrides.forCLI(environment: ["AGENTMENU_SESSION_STORE": "~/scratch/sessions.json"]).sessionStore?.path,
+            expandedHome + "/scratch/sessions.json",
+            "a ~-prefixed AGENTMENU_SESSION_STORE is tilde-expanded"
+        )
+        // Setting only the new key must move nothing else.
+        let only = Overrides.forCLI(environment: ["AGENTMENU_SESSION_STORE": "/tmp/x/sessions.json"])
+        t.expect(
+            only.config == nil && only.manifestsUserRoot == nil && only.profileRoot == nil
+                && only.defaultsSuite == nil && only.harnessDirectory == nil,
+            "AGENTMENU_SESSION_STORE alone leaves the other five fields nil"
+        )
+    })()
+
+    // The session host directory (KTD4): nil unless set, tilde-expanded,
+    // empty means unset, and it moves nothing else.
+    ({
+        t.expect(Overrides.forCLI(environment: [:]).sessionHostDirectory == nil, "AGENTMENU_SESSION_HOST_DIR is nil unless set")
+        t.expect(
+            Overrides.forCLI(environment: ["AGENTMENU_SESSION_HOST_DIR": ""]).sessionHostDirectory == nil,
+            "an empty AGENTMENU_SESSION_HOST_DIR is treated as unset"
+        )
+        let expandedHome = FileManager.default.homeDirectoryForCurrentUser.path
+        t.expectEqual(
+            Overrides.forCLI(environment: ["AGENTMENU_SESSION_HOST_DIR": "~/h"]).sessionHostDirectory?.path,
+            expandedHome + "/h",
+            "a ~-prefixed AGENTMENU_SESSION_HOST_DIR is tilde-expanded"
+        )
+        let only = Overrides.forCLI(environment: ["AGENTMENU_SESSION_HOST_DIR": "/tmp/h"])
+        t.expect(
+            only.config == nil && only.manifestsUserRoot == nil && only.profileRoot == nil
+                && only.defaultsSuite == nil && only.harnessDirectory == nil && only.sessionStore == nil,
+            "AGENTMENU_SESSION_HOST_DIR alone leaves the other six fields nil"
+        )
+        resetArgumentDomain()
+        defer { resetArgumentDomain() }
+        let closed = Overrides.forGUI(
+            defaults: argumentDomain([:]),
+            environment: ["AGENTMENU_SESSION_HOST_DIR": "/tmp/should-never-be-read"]
+        )
+        t.expect(closed.sessionHostDirectory == nil, "forGUI without the flag ignores AGENTMENU_SESSION_HOST_DIR, so a real launch never reaches a harness host")
+        let open = Overrides.forGUI(
+            defaults: argumentDomain(["AgentMenuHarness": "YES"]),
+            environment: ["AGENTMENU_SESSION_HOST_DIR": "/tmp/agentmenu-overrides-test/host"]
+        )
+        t.expectEqual(open.sessionHostDirectory?.path, "/tmp/agentmenu-overrides-test/host", "forGUI with the flag honours AGENTMENU_SESSION_HOST_DIR")
+    })()
+
+    // Gated exactly like the other five: without -AgentMenuHarness YES a
+    // launchctl-set variable cannot redirect a real launch's session store.
+    ({
+        resetArgumentDomain()
+        defer { resetArgumentDomain() }
+        let closed = Overrides.forGUI(
+            defaults: argumentDomain([:]),
+            environment: ["AGENTMENU_SESSION_STORE": "/tmp/should-never-be-read/sessions.json"]
+        )
+        t.expect(closed.sessionStore == nil, "forGUI without the flag ignores AGENTMENU_SESSION_STORE")
+        let open = Overrides.forGUI(
+            defaults: argumentDomain(["AgentMenuHarness": "YES"]),
+            environment: ["AGENTMENU_SESSION_STORE": "/tmp/agentmenu-overrides-test/sessions.json"]
+        )
+        t.expectEqual(open.sessionStore?.path, "/tmp/agentmenu-overrides-test/sessions.json", "forGUI with the flag honours AGENTMENU_SESSION_STORE")
     })()
 
     // MARK: - 4. forGUI, the mandatory negative case (KTD4's whole point):
@@ -143,6 +220,7 @@ func runOverridesTests(_ t: TestRunner) {
             "AGENTMENU_PROFILE_ROOT": "/tmp/agentmenu-overrides-test/gui-profiles",
             "AGENTMENU_DEFAULTS_SUITE": "dev.facens.agentmenu.gui-suite",
             "AGENTMENU_HARNESS_DIR": "/tmp/agentmenu-overrides-test/gui-harness",
+            "AGENTMENU_SESSION_STORE": "/tmp/agentmenu-overrides-test/gui-sessions.json",
         ]
         let overrides = Overrides.forGUI(defaults: defaults, environment: env)
         t.expectEqual(overrides.config?.path, "/tmp/agentmenu-overrides-test/gui-config.toml", "with the flag set, AGENTMENU_CONFIG is honoured")
@@ -150,6 +228,7 @@ func runOverridesTests(_ t: TestRunner) {
         t.expectEqual(overrides.profileRoot?.path, "/tmp/agentmenu-overrides-test/gui-profiles", "…and the profile root")
         t.expectEqual(overrides.defaultsSuite, "dev.facens.agentmenu.gui-suite", "…and the defaults suite")
         t.expectEqual(overrides.harnessDirectory?.path, "/tmp/agentmenu-overrides-test/gui-harness", "…and the harness directory")
+        t.expectEqual(overrides.sessionStore?.path, "/tmp/agentmenu-overrides-test/gui-sessions.json", "…and the session store")
     })()
 
     // `NO` (or absence) closes the gate exactly as absence does — the check

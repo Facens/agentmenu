@@ -52,8 +52,151 @@ func runHarnessFixtureTests(_ t: TestRunner) {
     hfix_testPathHash(t, harnessDir: harnessDir)
     hfix_testFirstRunFixture(t, harnessDir: harnessDir)
     hfix_testConfiguredTerminalFixture(t, harnessDir: harnessDir)
+    hfix_testOwnedSessionFixture(t, harnessDir: harnessDir)
     hfix_testConfiguredProfileFixture(t, harnessDir: harnessDir)
     hfix_testNeedsLoginPromptFixture(t, harnessDir: harnessDir)
+    hfix_testEveryConfigWritingFixturePinsKeepRunningOff(t, harnessDir: harnessDir, fixturesDir: fixturesDir)
+    hfix_testEveryConfigWritingFixturePlantsNotificationsAsked(t, harnessDir: harnessDir, fixturesDir: fixturesDir)
+    hfix_testPlantSessionHelper(t, fixturesDir: fixturesDir)
+}
+
+// MARK: - U5: the sessions-tab scenario's live session. `_plant-session.sh`
+// starts a real idle process and writes the registry file that describes it;
+// this runs it in a scratch HOME and reads the result back through the real
+// `RegistryReader`, which is the only thing that can say the `procStart` it
+// wrote (TZ=UTC `ps -o lstart=`) is one the reader accepts. The process is
+// killed on the way out whatever happens.
+
+private func hfix_testPlantSessionHelper(_ t: TestRunner, fixturesDir: URL) {
+    let script = fixturesDir.appendingPathComponent("_plant-session.sh").path
+    guard FileManager.default.fileExists(atPath: script) else {
+        t.expect(false, "harness/fixtures/agentmenu/_plant-session.sh is missing")
+        return
+    }
+    let home = TempDir("hf-plant-session")
+    defer { home.cleanup() }
+    let sessionID = "5d1c7e0a-3b6e-4d7a-9c21-0e0b7a4d1f33"
+    let result = runProcess(
+        "/bin/bash",
+        [script, sessionID, ".claude-work", "dev/it's a project", "30"],
+        environment: ["HOME": home.url.path]
+    )
+    t.expectEqual(result.status, 0, "_plant-session.sh runs in a scratch HOME — \(result.stderr)")
+    guard let pid = Int32(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        t.expect(false, "_plant-session.sh prints the pid and nothing else — got '\(result.stdout)'")
+        return
+    }
+    defer { kill(pid, SIGTERM) }
+
+    let profileDirectory = home.url.appendingPathComponent(".claude-work")
+    let file = profileDirectory.appendingPathComponent("sessions/\(pid).json")
+    t.expect(FileManager.default.fileExists(atPath: file.path), "the registry file is named for the pid")
+    t.expectEqual(
+        ((try? FileManager.default.contentsOfDirectory(atPath: profileDirectory.appendingPathComponent("sessions").path)) ?? []).sorted(),
+        ["\(pid).json"],
+        "nothing else is left in the sessions directory, no temporary file"
+    )
+
+    let reader = RegistryReader(
+        profiles: [RegistryProfile(id: "work", name: "Work", directory: profileDirectory)],
+        terminalResolver: TerminalHostResolver(terminals: [])
+    )
+    let sessions = reader.refresh()
+    t.expectEqual(sessions.count, 1, "the real reader lists the planted session — its procStart matches the running process")
+    guard let session = sessions.first else { return }
+    t.expectEqual(session.pid, pid, "it is the planted process")
+    t.expectEqual(session.sessionId, sessionID, "with the session id it was given")
+    t.expectEqual(session.status, .needsYou, "a permission prompt maps to Needs you, so the badge shows")
+    t.expectEqual(session.profileID, "work", "attributed to the profile whose directory it sits in")
+    t.expect(session.cwd?.hasSuffix("dev/it's a project") == true, "the working directory survives a space and an apostrophe — got \(session.cwd ?? "nil")")
+    t.expect(session.isClaudeCode, "it is a Claude Code row")
+}
+
+// MARK: - R15 / KTD16: "keep running when window closes" is on by default, so
+// every fixture that writes a config.toml pins it off in `[defaults]` — the
+// scenarios written before the field existed test a plain launch, and must
+// keep doing so. The one named exception is `owned-session`, which pins it ON
+// so the hosted launch path has a scenario. Discovered by running each
+// fixture rather than listed: a fixture added later that writes a config and
+// forgets the key fails here, and one that writes none (first-run,
+// journal-only) is not asked for it.
+
+private func hfix_testEveryConfigWritingFixturePinsKeepRunningOff(_ t: TestRunner, harnessDir: URL, fixturesDir: URL) {
+    let names = ((try? FileManager.default.contentsOfDirectory(atPath: fixturesDir.path)) ?? []).sorted()
+    var writers = 0
+    var sawOwnedSession = false
+    for name in names {
+        let script = fixturesDir.appendingPathComponent("\(name)/apply.sh")
+        guard FileManager.default.fileExists(atPath: script.path) else { continue }
+
+        guard let rig = hfix_makeRig("hf-keep-running-\(name)", harnessDir: harnessDir, t: t) else { continue }
+        defer { rig.dir.cleanup() }
+        let result = hfix_runDriver(rig, "fixture agentmenu/\(name) \"nonce-kr\"")
+        t.expectEqual(result.status, 0, "agentmenu/\(name) applied cleanly — \(result.stderr)")
+
+        // A fixture that plants no config.toml (first-run, journal-only) is
+        // not asked for the key: whether one is written is decided by
+        // running it, not by reading its source.
+        let configPath = rig.home + "/.config/agentmenu/config.toml"
+        guard let config = try? String(contentsOfFile: configPath, encoding: .utf8) else { continue }
+        writers += 1
+        // Parsed by the real decoder, not grepped: the key must be in
+        // `[defaults]`, not in a folder, or a comment, or a string.
+        let url = URL(fileURLWithPath: configPath)
+        // `owned-session` is the one named exception: it turns the session
+        // host on so owned-launch.sh exercises the hosted launch path.
+        let expected = (name == hfix_ownedSessionFixture)
+        if let loaded = t.attempt("load agentmenu/\(name)'s config.toml", { try ConfigStore(url: url).load() }), let parsed = loaded {
+            t.expectEqual(parsed.defaults.keepRunning, expected, "agentmenu/\(name) plants keep_running = \(expected) in [defaults]")
+        }
+        t.expect(config.contains("keep_running = \(expected)"), "agentmenu/\(name)'s config.toml spells the key the way the app reads it")
+        if expected {
+            sawOwnedSession = true
+        } else {
+            t.expect(!config.contains("keep_running = true"), "agentmenu/\(name) does not turn the session host on: only \(hfix_ownedSessionFixture) may")
+        }
+    }
+    t.expect(writers >= 3, "the discovery found the config-writing fixtures (configured-terminal, configured-profile, needs-login-prompt) — got \(writers); an empty enumeration would make this check vacuous")
+    t.expect(sawOwnedSession, "the discovery found \(hfix_ownedSessionFixture), the one fixture that must carry keep_running = true")
+}
+
+/// The one fixture whose config turns "keep running" on (U11): the hosted
+/// launch path's scenario, `owned-launch`, runs on it.
+private let hfix_ownedSessionFixture = "owned-session"
+
+// MARK: - KTD15 / KTD16: AgentMenu asks macOS for notification permission on
+// the first launch it makes or the first open of the Sessions tab, and that
+// system prompt is one the shared dialog script cannot answer. A fixture that
+// writes a config.toml therefore plants `notifications_asked = true`, so no
+// scenario on it meets the prompt. Discovered by running each fixture, like
+// the check above: one added later that writes a config and forgets the key
+// fails here, and one that writes none (first-run, journal-only) is not asked.
+
+private func hfix_testEveryConfigWritingFixturePlantsNotificationsAsked(_ t: TestRunner, harnessDir: URL, fixturesDir: URL) {
+    let names = ((try? FileManager.default.contentsOfDirectory(atPath: fixturesDir.path)) ?? []).sorted()
+    var writers = 0
+    for name in names {
+        let script = fixturesDir.appendingPathComponent("\(name)/apply.sh")
+        guard FileManager.default.fileExists(atPath: script.path) else { continue }
+
+        guard let rig = hfix_makeRig("hf-notifications-asked-\(name)", harnessDir: harnessDir, t: t) else { continue }
+        defer { rig.dir.cleanup() }
+        let result = hfix_runDriver(rig, "fixture agentmenu/\(name) \"nonce-na\"")
+        t.expectEqual(result.status, 0, "agentmenu/\(name) applied cleanly — \(result.stderr)")
+
+        let configPath = rig.home + "/.config/agentmenu/config.toml"
+        guard let config = try? String(contentsOfFile: configPath, encoding: .utf8) else { continue }
+        writers += 1
+        // Parsed by the real decoder: a key in a table, a comment or a string
+        // would not count.
+        let url = URL(fileURLWithPath: configPath)
+        if let loaded = t.attempt("load agentmenu/\(name)'s config.toml", { try ConfigStore(url: url).load() }), let parsed = loaded {
+            t.expectEqual(parsed.notificationsAsked, true, "agentmenu/\(name) plants notifications_asked = true")
+            t.expectEqual(parsed.notifyNeedsYou, true, "and leaves the Needs-you toggle at its default, on")
+        }
+        t.expect(config.contains("notifications_asked = true"), "agentmenu/\(name)'s config.toml spells the key the way the app reads it")
+    }
+    t.expect(writers >= 3, "the discovery found the config-writing fixtures (configured-terminal, configured-profile, needs-login-prompt) — got \(writers); an empty enumeration would make this check vacuous")
 }
 
 // MARK: - Every new shell file parses under `bash -n`, and every apply.sh /
@@ -67,9 +210,10 @@ private func hfix_testShellFilesParseAndAreExecutable(
         harnessDir.appendingPathComponent("lib/fixtures.sh").path,
         fixturesDir.appendingPathComponent("_lib.sh").path,
     ]
-    for fixture in ["first-run", "configured-terminal", "configured-profile", "needs-login-prompt"] {
+    for fixture in ["first-run", "configured-terminal", "configured-profile", "needs-login-prompt", hfix_ownedSessionFixture] {
         files.append(fixturesDir.appendingPathComponent("\(fixture)/apply.sh").path)
     }
+    files.append(fixturesDir.appendingPathComponent("_plant-session.sh").path)
     for scenario in hfix_scenarioNames {
         files.append(scenariosDir.appendingPathComponent("\(scenario).sh").path)
     }
@@ -86,6 +230,7 @@ private func hfix_testShellFilesParseAndAreExecutable(
 }
 
 /// The seven R9 scenario names, in the same order the plan lists them, plus
+/// `sessions-tab` and `owned-launch` (the session manager's two), plus
 /// `launch-at-login-prompt` — the scenario that proves the existing-install
 /// alert path `LaunchAtLoginPrompt.presentIfNeeded` raises, which none of
 /// the original seven reach (`agentmenu/configured-profile` and
@@ -100,6 +245,8 @@ private let hfix_scenarioNames = [
     "profile-both",
     "bridge-install",
     "launch-at-login-prompt",
+    "sessions-tab",
+    "owned-launch",
 ]
 
 // MARK: - Every scenario clicks, so every scenario declares
@@ -196,6 +343,7 @@ private func hfix_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenar
         "popover.profile.work",
         "popover.profile.personal",
         "launchAtLoginPrompt.accept",
+        "popover.tab.sessions",
     ]
 
     for scenario in hfix_scenarioNames {
@@ -208,6 +356,7 @@ private func hfix_testScenarioClicksNameKnownIdentifiers(_ t: TestRunner, scenar
             let recognized = knownLiterals.contains(identifier)
                 || (identifier.hasPrefix("setup.folder.") && identifier.hasSuffix(".toggle"))
                 || (identifier.hasPrefix("popover.row.") && identifier.hasSuffix(".launch"))
+                || (identifier.hasPrefix("popover.sessions.live.") && identifier.hasSuffix(".row"))
             t.expect(recognized, "\(scenario).sh clicks '\(identifier)', which does not match a known AccessibilityID shape")
         }
     }
@@ -420,6 +569,46 @@ private func hfix_testConfiguredTerminalFixture(_ t: TestRunner, harnessDir: URL
         t.expect(overlay.contains(requiredKey), "the overlay carries '\(requiredKey)' — TerminalManifest.parse requires every one of these, or the whole file fails to parse and the bundled, disabled manifest stays in charge")
     }
     t.expect(overlay.contains("enabled = true"), "the overlay flips enabled to true, unlike the bundled manifest it was copied from")
+}
+
+// MARK: - agentmenu/owned-session: configured-terminal's twin with the session
+// host turned on. Same folder, profile, binaries, overlay and trust, so the
+// only thing that differs between owned-launch and launch-terminal is the host.
+
+private func hfix_testOwnedSessionFixture(_ t: TestRunner, harnessDir: URL) {
+    guard let rig = hfix_makeRig("hf-owned-session", harnessDir: harnessDir, t: t) else { return }
+    defer { rig.dir.cleanup() }
+    let result = hfix_runDriver(rig, #"fixture agentmenu/owned-session "nonce-os""#)
+    t.expectEqual(result.status, 0, "agentmenu/owned-session applied cleanly — \(result.stderr)")
+
+    let configPath = rig.home + "/.config/agentmenu/config.toml"
+    guard let config = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+        t.expect(false, "config.toml was written at \(configPath)")
+        return
+    }
+    t.expect(config.contains("keep_running = true"), "config.toml turns the session host on")
+    for line in ["first_run_completed = true", "launch_at_login_asked = true", "notifications_asked = true", "id = \"harness-checkout\"", "trusted = true"] {
+        t.expect(config.contains(line), "config.toml carries '\(line)', like configured-terminal's")
+    }
+    // It must be configured-terminal's config with that one line changed.
+    let siblingRig = hfix_makeRig("hf-owned-session-sibling", harnessDir: harnessDir, t: t)
+    defer { siblingRig?.dir.cleanup() }
+    if let siblingRig {
+        let sibling = hfix_runDriver(siblingRig, #"fixture agentmenu/configured-terminal "nonce-os""#)
+        t.expectEqual(sibling.status, 0, "agentmenu/configured-terminal applied cleanly — \(sibling.stderr)")
+        let siblingConfig = (try? String(contentsOfFile: siblingRig.home + "/.config/agentmenu/config.toml", encoding: .utf8)) ?? ""
+        t.expectEqual(
+            siblingConfig.replacingOccurrences(of: "keep_running = false", with: "keep_running = true")
+                .replacingOccurrences(of: siblingRig.home, with: rig.home),
+            config,
+            "owned-session's config.toml is configured-terminal's with only keep_running flipped"
+        )
+        let overlay = (try? String(contentsOfFile: rig.home + "/.config/agentmenu/terminals/terminal-app.toml", encoding: .utf8)) ?? ""
+        let siblingOverlay = (try? String(contentsOfFile: siblingRig.home + "/.config/agentmenu/terminals/terminal-app.toml", encoding: .utf8)) ?? ""
+        t.expect(!overlay.isEmpty, "owned-session plants the terminal-app overlay")
+        t.expectEqual(overlay, siblingOverlay, "and it is the same overlay configured-terminal plants")
+        t.expect(!overlay.contains("in window") && overlay.contains("do script cmd"), "the overlay opens a new window every time")
+    }
 }
 
 // MARK: - agentmenu/configured-profile: one account, no folders, no agent.

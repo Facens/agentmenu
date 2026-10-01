@@ -85,16 +85,26 @@ struct ProfilesPane: View {
                     .foregroundStyle(.secondary)
             }
 
-            // R29 / R47: the status-line bridge is installed from here and
-            // nowhere else — the bundled CLI is not on PATH, and the popover's
+            // R29 / R47 / R14: the status-line bridge is installed — and removed —
+            // from here and nowhere else — the bundled CLI is not on PATH, and the popover's
             // setup card deliberately does not offer a write into the agent's
             // own directory. The exception to "never writes to it" above.
             Section {
                 LabeledContent("Rate-limit readout") {
-                    Button("Install status-line bridge…") { installBridge(index: index) }
-                        .controlSize(.small)
-                        .fixedSize()
-                        .accessibilityIdentifier(AccessibilityID.Settings.Accounts.installBridge)
+                    let installed = model.bridgeScriptExists(profileID: model.config.profiles[index].id)
+                    HStack {
+                        Text(installed ? "Installed" : "Not installed")
+                            .foregroundStyle(.secondary)
+                        Button("Install status-line bridge…") { installBridge(index: index) }
+                            .controlSize(.small)
+                            .fixedSize()
+                            .accessibilityIdentifier(AccessibilityID.Settings.Accounts.installBridge)
+                        Button("Remove…") { removeBridge(index: index) }
+                            .controlSize(.small)
+                            .fixedSize()
+                            .disabled(!installed)
+                            .accessibilityIdentifier(AccessibilityID.Settings.Accounts.removeBridge)
+                    }
                 }
                 if let report = model.bridgeInstallReport[model.config.profiles[index].id] {
                     Text(report)
@@ -104,7 +114,7 @@ struct ProfilesPane: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } footer: {
-                Text("Writes agentmenu-statusline.sh into this directory and points statusLine in its settings.json at it, so the readout can see the rate limits Claude Code reports. A status line you already have keeps running: the bridge chains to it.")
+                Text("Writes agentmenu-statusline.sh into this directory and points statusLine in its settings.json at it, so the readout can see the rate limits Claude Code reports. A status line you already have keeps running: the bridge chains to it. Remove undoes both.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -123,6 +133,20 @@ struct ProfilesPane: View {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         model.installStatusLineBridge(profileID: profile.id)
+    }
+
+    /// Names every file and the key before anything is changed (R47, R14),
+    /// then lets the CLI do it and shows what it said.
+    private func removeBridge(index: Int) {
+        let profile = model.config.profiles[index]
+        let files = StatuslineBridge.installedFilenames().joined(separator: ", ")
+        let alert = NSAlert()
+        alert.messageText = "Remove the status-line bridge for \u{201C}\(profile.name.isEmpty ? profile.id : profile.name)\u{201D}?"
+        alert.informativeText = "AgentMenu deletes \(files) from \(profile.configDirectory), and puts statusLine.command in \(profile.configDirectory)/settings.json back to the status line you had before the bridge. If you had none, it removes the statusLine key. Every other key in that file is left as it is. If statusLine.command has been changed since the bridge was installed, nothing is touched."
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        model.removeStatusLineBridge(profileID: profile.id)
     }
 
     private var profileIndex: Int? {

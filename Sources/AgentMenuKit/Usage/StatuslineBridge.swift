@@ -15,8 +15,9 @@ import Foundation
 ///
 /// This is the one place in the whole project that writes into an agent's
 /// configuration directory (R47): the snapshot file, the history file, the
-/// bridge script, and one key of `settings.json` — nothing else, and only
-/// when `install-statusline` runs.
+/// bridge script, and one key of `settings.json` — nothing else, only when
+/// `install-statusline` runs, and `install-statusline --remove` takes all of
+/// it back out (`StatuslineBridgeRemoval.swift`).
 public enum StatuslineBridge {
     /// Matches `UsageReader.supportedVersions` — the version this bridge
     /// stamps every snapshot it writes with.
@@ -568,6 +569,12 @@ public enum StatuslineBridge {
         /// which is not always the one being installed — see
         /// `bridgeScriptPath(inCommand:)`.
         case bridgeScriptUnreadable(path: String)
+        /// Removal found no AgentMenu bridge in `statusLine.command`.
+        case notBridgeCommand
+        /// Removal found the bridge, but the script it names no longer says
+        /// what it chained to — the original command is not recoverable, and
+        /// guessing "nothing" would delete it for good.
+        case bridgeChainUnrecoverable(path: String)
 
         public var description: String {
             switch self {
@@ -583,6 +590,11 @@ public enum StatuslineBridge {
                     + "If the original status-line command is truly gone, clear statusLine in settings.json "
                     + "(or reinstall the command you want the bridge to chain to at that path) and run "
                     + "install-statusline again."
+            case .notBridgeCommand:
+                return "statusLine.command is not the agentmenu bridge"
+            case .bridgeChainUnrecoverable(let path):
+                return "the bridge script at \(path) does not say which status line it chains to, so the "
+                    + "original command cannot be recovered"
             }
         }
     }
@@ -655,15 +667,17 @@ public enum StatuslineBridge {
         return SettingsUpdate(text: newText, chain: chain, alreadyInstalled: alreadyInstalled)
     }
 
-    /// Replaces the value of a top-level (depth-1) key in raw JSON `text`
-    /// with `rawValue`, or inserts `"key": rawValue` into the root object
-    /// when the key is absent. Does not attempt to understand the value it
-    /// replaces beyond finding its span — it just balances brackets and
-    /// string quoting while scanning, which is all a byte-preserving splice
-    /// needs. `settingsUpdate` re-parses and diffs the result, so a text
-    /// this scanner gets wrong throws there rather than shipping silently.
-    static func replaceTopLevelKey(in text: String, key: String, withRawValue rawValue: String) throws -> String {
-        let chars = Array(text)
+    /// Where the root object and one top-level key sit in raw JSON `chars`:
+    /// the root's `{` and `}` indices, and — when `key` is a depth-1 key —
+    /// the index of its opening quote and one past its closing quote.
+    struct TopLevelKeyLocation {
+        let rootStart: Int
+        let rootEnd: Int
+        let keyStart: Int?
+        let keyEnd: Int?
+    }
+
+    static func locateTopLevelKey(_ chars: [Character], key: String) throws -> TopLevelKeyLocation {
         let keyChars = Array(key)
 
         func matchesKey(at i: Int) -> Bool {
@@ -726,6 +740,23 @@ public enum StatuslineBridge {
         guard let rootStart, let rootEnd, rootEnd > rootStart else {
             throw SettingsUpdateError.notAnObject
         }
+        return TopLevelKeyLocation(rootStart: rootStart, rootEnd: rootEnd, keyStart: keyStart, keyEnd: keyEnd)
+    }
+
+    /// Replaces the value of a top-level (depth-1) key in raw JSON `text`
+    /// with `rawValue`, or inserts `"key": rawValue` into the root object
+    /// when the key is absent. Does not attempt to understand the value it
+    /// replaces beyond finding its span — it just balances brackets and
+    /// string quoting while scanning, which is all a byte-preserving splice
+    /// needs. `settingsUpdate` re-parses and diffs the result, so a text
+    /// this scanner gets wrong throws there rather than shipping silently.
+    static func replaceTopLevelKey(in text: String, key: String, withRawValue rawValue: String) throws -> String {
+        let chars = Array(text)
+        let located = try locateTopLevelKey(chars, key: key)
+        let rootStart = located.rootStart
+        let rootEnd = located.rootEnd
+        let keyStart = located.keyStart
+        let keyEnd = located.keyEnd
 
         if let keyStart, let keyEnd {
             guard let valueRange = scanValue(chars, from: keyEnd) else {
@@ -752,7 +783,7 @@ public enum StatuslineBridge {
     /// quote) past the `:` and any whitespace, then returns the index range
     /// of the value itself — a balanced object/array, a string, or a bare
     /// token (number/bool/null) ended by the next unquoted `,`, `}`, or `]`.
-    private static func scanValue(_ chars: [Character], from colonSearchStart: Int) -> ClosedRange<Int>? {
+    static func scanValue(_ chars: [Character], from colonSearchStart: Int) -> ClosedRange<Int>? {
         var i = colonSearchStart
         while i < chars.count, chars[i] != ":" { i += 1 }
         guard i < chars.count else { return nil }

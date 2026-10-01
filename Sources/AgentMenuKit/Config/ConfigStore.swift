@@ -106,6 +106,13 @@ enum ConfigCodec {
         config.activeProfileID = root["active_profile"]?.stringValue
         config.firstRunCompleted = root["first_run_completed"]?.boolValue ?? false
         config.launchAtLoginAsked = root["launch_at_login_asked"]?.boolValue ?? false
+        config.notificationsAsked = root["notifications_asked"]?.boolValue ?? false
+        config.reopenAtLoginAsked = root["reopen_at_login_asked"]?.boolValue ?? false
+        // Default OFF: only an explicit `true` turns it on.
+        config.reopenAtLogin = root["reopen_at_login"]?.boolValue ?? false
+        // Default ON: a missing key, or one that is not a boolean, is "on".
+        config.notifyNeedsYou = root["notify_needs_you"]?.boolValue ?? true
+        config.notifyYourTurn = root["notify_your_turn"]?.boolValue ?? true
         config.defaults = decodePreset(root["defaults"]?.tableValue ?? TOMLTable())
         config.betaUpdates = root["updates"]?.tableValue?["beta"]?.boolValue
 
@@ -149,6 +156,7 @@ enum ConfigCodec {
         if let advisorValue = table["advisor"]?.stringValue {
             preset.advisor = advisorValue == "off" ? .off : .model(advisorValue)
         }
+        preset.keepRunning = table["keep_running"]?.boolValue
         return preset
     }
 
@@ -238,6 +246,23 @@ enum ConfigCodec {
             root.removeValue(forKey: "launch_at_login_asked")
         }
 
+        // `notifications_asked` has the same shape: a fresh config carries no
+        // trace of a question nobody has been asked, and the key appears once
+        // the question is put — never `= false`.
+        setOrRemove(&root, "notifications_asked", config.notificationsAsked ? .boolean(true) : nil)
+
+        // Both of the reopen-at-login keys default to false, so only `true` is
+        // ever written (R25): the asked flag like `launch_at_login_asked`, the
+        // setting as the one exception to its default.
+        setOrRemove(&root, "reopen_at_login_asked", config.reopenAtLoginAsked ? .boolean(true) : nil)
+        setOrRemove(&root, "reopen_at_login", config.reopenAtLogin ? .boolean(true) : nil)
+
+        // The mirror image, because this one defaults to ON: only the
+        // exception is written, so a config that never mentions it is
+        // byte-identical to one saved with notifications on.
+        setOrRemove(&root, "notify_needs_you", config.notifyNeedsYou ? nil : .boolean(false))
+        setOrRemove(&root, "notify_your_turn", config.notifyYourTurn ? nil : .boolean(false))
+
         var defaultsTable = root["defaults"]?.tableValue ?? TOMLTable()
         encodePreset(config.defaults, into: &defaultsTable)
         setOrRemoveTable(&root, "defaults", defaultsTable)
@@ -294,6 +319,9 @@ enum ConfigCodec {
         case .model(let model):
             table.set(.string(model), at: ["advisor"])
         }
+        // Absent stays absent: a `nil` never materialises a key on save, so
+        // an inheriting layer keeps inheriting whatever the default becomes.
+        setOrRemove(&table, "keep_running", preset.keepRunning.map(TOMLValue.boolean))
     }
 
     /// Matches existing array-of-tables entries to the in-memory list by id

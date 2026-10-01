@@ -32,6 +32,11 @@ public enum TerminalLauncherError: Error, CustomStringConvertible, Equatable {
     /// is not a launch that worked.
     case terminalDidNotAnswer(seconds: TimeInterval)
 
+    /// The fallback when a refusal is recorded and the Automation pane has
+    /// nothing to tick: it forgets every Automation decision made for
+    /// AgentMenu, so the next launch asks again.
+    public static let resetCommand = "tccutil reset AppleEvents dev.facens.agentmenu"
+
     public var description: String {
         switch self {
         case .terminalFailed(let exitCode, let stderrOutput):
@@ -40,6 +45,7 @@ public enum TerminalLauncherError: Error, CustomStringConvertible, Equatable {
         case .automationDenied:
             return "macOS has not allowed AgentMenu to control your terminal. "
                 + "System Settings › Privacy & Security › Automation › AgentMenu, and tick the terminal. "
+                + "If it is not listed there, run `\(Self.resetCommand)` and launch again to be asked afresh. "
                 + "A rebuilt AgentMenu asks again: the permission is remembered against the build that asked for it."
         case .terminalDidNotAnswer(let seconds):
             return "the terminal did not answer within \(Int(seconds)) seconds, so the launch could not be confirmed"
@@ -63,10 +69,33 @@ public struct TerminalLauncher {
     /// for the user to close the window.
     public typealias Runner = (_ executable: String, _ arguments: [String], _ expectsExit: Bool) throws -> Void
 
-    private let runner: Runner
+    /// A `Runner` that is also told how long it may wait for a process whose
+    /// exit is the answer (`nil` = its own default). The launcher picks the
+    /// cap from what macOS says about Automation consent, so `osascript` is
+    /// never killed on the short cap while a consent prompt may be up.
+    public typealias TimedRunner = (
+        _ executable: String, _ arguments: [String], _ expectsExit: Bool, _ exitTimeout: TimeInterval?
+    ) throws -> Void
+
+    /// Whether macOS has already decided this app may control the one with the
+    /// given bundle id, asked without prompting. `AutomationConsent.query`.
+    public typealias ConsentProbe = (_ bundleID: String) -> AutomationConsent
+
+    private let runner: TimedRunner
+    private let consent: ConsentProbe?
 
     public init(runner: @escaping Runner) {
-        self.runner = runner
+        self.runner = { executable, arguments, expectsExit, _ in try runner(executable, arguments, expectsExit) }
+        self.consent = nil
+    }
+
+    /// The real wiring: `consent` is asked before an AppleScript terminal is
+    /// sent anything. Denied fails at once with the fix; granted keeps the
+    /// short wait cap; anything else (a prompt is coming, or may) gets the
+    /// long one.
+    public init(timedRunner: @escaping TimedRunner, consent: @escaping ConsentProbe) {
+        self.runner = timedRunner
+        self.consent = consent
     }
 
     /// Two caps, because there are two shapes of process here.
@@ -89,7 +118,17 @@ public struct TerminalLauncher {
         exitTimeout: TimeInterval = 120.0,
         detachTimeout: TimeInterval = 3.0
     ) -> Runner {
-        { executable, arguments, expectsExit in
+        let timed = systemTimedRunner(exitTimeout: exitTimeout, detachTimeout: detachTimeout)
+        return { executable, arguments, expectsExit in try timed(executable, arguments, expectsExit, nil) }
+    }
+
+    /// `systemRunner` with the exit cap chosen per call: a non-nil
+    /// `exitTimeout` argument replaces the default one.
+    public static func systemTimedRunner(
+        exitTimeout defaultExitTimeout: TimeInterval = 120.0,
+        detachTimeout: TimeInterval = 3.0
+    ) -> TimedRunner {
+        { executable, arguments, expectsExit, exitTimeoutOverride in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
@@ -117,7 +156,7 @@ public struct TerminalLauncher {
             // is treated as success rather than blocking the caller (the
             // main thread, for the popover) indefinitely. Only a definite
             // non-zero exit observed within the cap is reported as failure.
-            let cap = expectsExit ? exitTimeout : detachTimeout
+            let cap = expectsExit ? (exitTimeoutOverride ?? defaultExitTimeout) : detachTimeout
             guard exited.wait(timeout: .now() + cap) == .success else {
                 // A process that had to exit and did not is not a success it
                 // has yet to report — it is a launch with no evidence behind
@@ -189,7 +228,18 @@ public struct TerminalLauncher {
                 ("{dir}", command.workingDirectory),
                 ("{command}", command.shellCommand),
             ])
-            try runner("/usr/bin/osascript", ["-e", script, command.shellCommand, command.workingDirectory], true)
+            // Ask macOS first, without prompting. A refusal already on record
+            // fails here with the fix; a decision still to be made means the
+            // script will raise the consent prompt and `osascript` will sit
+            // under it, so it is given the long cap, never the short one
+            // (killing it with the sheet up records a permanent refusal).
+            var exitTimeout: TimeInterval?
+            if let consent, let bundleID = terminal.bundleID {
+                let state = consent(bundleID)
+                if state == .denied { throw TerminalLauncherError.automationDenied(detail: "") }
+                exitTimeout = state.exitTimeout
+            }
+            try runner("/usr/bin/osascript", ["-e", script, command.shellCommand, command.workingDirectory], true, exitTimeout)
         case .argv:
             guard let binaryPath else {
                 throw CommandBuilderError.binaryNotResolved(terminal.binary ?? terminal.id)
@@ -200,7 +250,7 @@ public struct TerminalLauncher {
                     ("{command}", command.shellCommand),
                 ])
             }
-            try runner(binaryPath, arguments, false)
+            try runner(binaryPath, arguments, false, nil)
         }
     }
 

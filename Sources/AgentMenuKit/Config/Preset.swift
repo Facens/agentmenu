@@ -10,7 +10,7 @@ import Foundation
 /// `.model(_)` is enabled with the named advisor model. Preset itself wraps
 /// this in one more layer of optional (`AdvisorSetting?`) so "absent, inherit
 /// from the layer below" is a third, still-distinct state.
-public enum AdvisorSetting: Equatable, Hashable {
+public enum AdvisorSetting: Equatable, Hashable, Sendable {
     case off
     case model(String)
 }
@@ -20,7 +20,7 @@ public enum AdvisorSetting: Equatable, Hashable {
 /// means "inherit from the layer below" — never a default value. Do not give
 /// any field here a non-nil default; that would silently promote this layer
 /// above the one it is supposed to defer to.
-public struct Preset: Equatable {
+public struct Preset: Equatable, Sendable {
     public var agent: String?
     public var terminal: String?
     public var profile: String?
@@ -28,6 +28,18 @@ public struct Preset: Equatable {
     public var effort: String?
     public var permissionMode: String?
     public var advisor: AdvisorSetting?
+    /// "Keep running when window closes" (R15). A layer's own value is
+    /// `nil` (inherit), `true` or `false`; `PresetResolver` turns the merged
+    /// stack into the effective value, applying `keepRunningDefault` when no
+    /// layer set one. After resolution `nil` means "not applicable" (the
+    /// agent or terminal cannot keep a session running), never "inherit".
+    public var keepRunning: Bool?
+
+    /// The global default when no layer sets `keep_running`: ON, for new and
+    /// existing installs alike. A missing key inherits this rather than
+    /// writing it, so a config that never mentioned the field stays byte-for-
+    /// byte what it was.
+    public static let keepRunningDefault = true
 
     public init(
         agent: String? = nil,
@@ -36,7 +48,8 @@ public struct Preset: Equatable {
         model: String? = nil,
         effort: String? = nil,
         permissionMode: String? = nil,
-        advisor: AdvisorSetting? = nil
+        advisor: AdvisorSetting? = nil,
+        keepRunning: Bool? = nil
     ) {
         self.agent = agent
         self.terminal = terminal
@@ -45,13 +58,14 @@ public struct Preset: Equatable {
         self.effort = effort
         self.permissionMode = permissionMode
         self.advisor = advisor
+        self.keepRunning = keepRunning
     }
 
     /// True when every field is absent — this layer would change nothing if
     /// overlaid on top of another.
     public var isEmpty: Bool {
         agent == nil && terminal == nil && profile == nil && model == nil
-            && effort == nil && permissionMode == nil && advisor == nil
+            && effort == nil && permissionMode == nil && advisor == nil && keepRunning == nil
     }
 
     /// Fields set in `other` win; fields absent in `other` keep this layer's
@@ -65,7 +79,8 @@ public struct Preset: Equatable {
             model: other.model ?? model,
             effort: other.effort ?? effort,
             permissionMode: other.permissionMode ?? permissionMode,
-            advisor: other.advisor ?? advisor
+            advisor: other.advisor ?? advisor,
+            keepRunning: other.keepRunning ?? keepRunning
         )
     }
 }

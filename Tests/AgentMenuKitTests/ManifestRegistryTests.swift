@@ -705,6 +705,60 @@ func runManifestRegistryTests(_ t: TestRunner) {
             t.expect(false, "iterm2 did not load from Resources/terminals")
         }
 
+        // Terminal launch scripts never type into an existing window or
+        // session (session manager, U11). AgentMenu hosts sessions itself and
+        // sends attach and restore commands through this script; a script that
+        // targeted window 1, or an existing session, would type them into
+        // whatever is running there.
+        if let terminalApp = registry.terminal(id: "terminal-app") {
+            let script = terminalApp.appleScript ?? ""
+            t.expect(script.contains("do script cmd"), "terminal-app's launch script runs `do script cmd`")
+            t.expect(!script.contains("in window"), "terminal-app's launch script never targets a window (`do script cmd in window 1` types into a running session)")
+            t.expect(!script.contains("window 1"), "terminal-app's launch script names no window at all")
+            t.expect(!script.contains("count of windows"), "terminal-app's launch script does not branch on whether Terminal already has a window: a new window every time")
+            t.expect(script.contains("activate"), "terminal-app's launch script still activates Terminal")
+            let doScripts = script.split(separator: "\n").filter { $0.contains("do script") }
+            t.expectEqual(doScripts.count, 1, "terminal-app's launch script has exactly one `do script`")
+
+            // The harness's configured-terminal and owned-session fixtures
+            // plant a verbatim copy of this manifest as a user overlay, so
+            // the launch scenarios exercise the shipped script. Their copy
+            // must not drift from it.
+            let bundledScript = terminalApp.appleScript ?? ""
+            for fixture in ["configured-terminal", "owned-session"] {
+                let applyURL = repositoryResourcesRoot
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("harness/fixtures/agentmenu/\(fixture)/apply.sh")
+                guard let apply = try? String(contentsOf: applyURL, encoding: .utf8) else {
+                    t.expect(false, "could not read \(applyURL.path)")
+                    continue
+                }
+                let marker = "applescript = \"\"\"\n"
+                if let open = apply.range(of: marker),
+                   let close = apply.range(of: "\"\"\"", range: open.upperBound..<apply.endIndex) {
+                    t.expectEqual(String(apply[open.upperBound..<close.lowerBound]), bundledScript, "agentmenu/\(fixture)'s overlay carries terminal-app's launch script verbatim")
+                } else {
+                    t.expect(false, "agentmenu/\(fixture)/apply.sh carries no applescript block")
+                }
+            }
+        }
+        // iTerm2 opens a new tab or window and types only into the session
+        // it has just created, never into `current session of current window`
+        // or any other existing one.
+        if let iterm2 = registry.terminal(id: "iterm2") {
+            let script = iterm2.appleScript ?? ""
+            let lines = script.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            let writes = lines.filter { $0.contains("write text") }
+            t.expectEqual(writes.count, 2, "iterm2's launch script writes text in exactly two places: a new window's session and a new tab's session")
+            t.expect(
+                writes.allSatisfy { $0 == "tell current session of w to write text cmd" || $0 == "tell current session of t to write text cmd" },
+                "iterm2 only ever writes into the session of a window or tab it just created — got: \(writes)"
+            )
+            t.expect(script.contains("set w to (create window with default profile)"), "iterm2 binds w to a window it has just created")
+            t.expect(script.contains("set t to (create tab with default profile)"), "iterm2 binds t to a tab it has just created")
+            t.expect(!script.contains("current session of current"), "iterm2's launch script never reaches an existing session through `current session of current ...`")
+        }
+
         // A manifest that sets every key docs/adding-an-agent.md documents —
         // proof each one actually lands on the parsed value, not just that
         // the file parses.
@@ -982,6 +1036,45 @@ func runManifestRegistryTests(_ t: TestRunner) {
         } catch {
             t.expect(false, "wrong error type for applescript terminal missing bundle_id: \(error)")
         }
+    }
+
+    // MARK: 16b. U6 — focus_applescript is optional, and an overlay without it hides focus
+
+    do {
+        let dir = TempDir("terminal-focus-overlay")
+        defer { dir.cleanup() }
+
+        let bundled = """
+        schema = 1
+        id = "focus-term"
+        display_name = "Focus Term"
+        kind = "applescript"
+        bundle_id = "com.example.focusterm"
+        applescript = "on run argv\\nend run"
+        focus_applescript = "on run argv\\n  return \\"focused\\"\\nend run"
+        """
+        let overlay = """
+        schema = 1
+        id = "focus-term"
+        display_name = "Focus Term (mine)"
+        kind = "applescript"
+        bundle_id = "com.example.focusterm"
+        applescript = "on run argv\\nend run"
+        """
+        t.expectNoThrow("write bundled terminal with a focus script") { try dir.write(bundled, to: "bundled/terminals/focus-term.toml") }
+        let bundledOnly = ManifestRegistry(bundledRoot: dir.url.appendingPathComponent("bundled"), userRoot: nil)
+        bundledOnly.load()
+        t.expect(bundledOnly.terminal(id: "focus-term")?.focusAppleScript != nil, "the bundled terminal can be focused")
+
+        t.expectNoThrow("write a user overlay that predates the key") { try dir.write(overlay, to: "user/terminals/focus-term.toml") }
+        let overlaid = ManifestRegistry(
+            bundledRoot: dir.url.appendingPathComponent("bundled"),
+            userRoot: dir.url.appendingPathComponent("user")
+        )
+        overlaid.load()
+        t.expectEqual(overlaid.terminal(id: "focus-term")?.displayName, "Focus Term (mine)", "the overlay wins and still loads")
+        t.expect(overlaid.terminal(id: "focus-term").map({ $0.focusAppleScript == nil }) == true, "an overlay without the key keeps working, with focus hidden")
+        t.expect(overlaid.failures.isEmpty, "and nothing is reported as wrong with it")
     }
 
     // MARK: 17. profile_env and profile_flag both set is rejected — declare exactly one, or neither

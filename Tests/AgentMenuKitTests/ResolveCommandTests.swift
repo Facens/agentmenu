@@ -131,6 +131,134 @@ func runResolveCommandTests(_ t: TestRunner) {
     }
     }
 
+    // 3b. resolve --keep-running (R15) prints what the popover would carry for
+    // the folder: `true`/`false`, or `n/a` when the terminal cannot keep a
+    // session running. Existing modes' output is untouched (steps 1-3 above).
+    do {
+        let keepDirs = ["inherit", "off", "on"].map { dir.path("keep-\($0)") }
+        for keepDir in keepDirs { try? FileManager.default.createDirectory(atPath: keepDir, withIntermediateDirectories: true) }
+        func keepConfig(terminal: String?, extra: String = "") -> String {
+            """
+            schema = 1
+            active_profile = "work"
+
+            [defaults]
+            agent = "claude-code"
+            \(terminal.map { "terminal = \"\($0)\"" } ?? "")
+
+            [[profiles]]
+            id = "work"
+            name = "Work"
+            config_dir = "\(claudeDir)"
+
+            [[folders]]
+            label = "Inherit"
+            path = "\(keepDirs[0])"
+
+            [[folders]]
+            label = "Off"
+            path = "\(keepDirs[1])"
+            keep_running = false
+
+            [[folders]]
+            label = "On"
+            path = "\(keepDirs[2])"
+            keep_running = true
+
+            [binaries]
+            claude = "/usr/bin/true"
+
+            \(extra)
+            """
+        }
+
+        func keepRunning(_ directory: String, config: String, label: String) -> String? {
+            let path = dir.path("keep-\(label).toml")
+            try? config.write(toFile: path, atomically: true, encoding: .utf8)
+            let result = t.attempt("resolve --keep-running (\(label))") {
+                try runCLI(binary, ["resolve", directory, "--keep-running"], env: ["AGENTMENU_CONFIG": path])
+            }
+            guard let result else { return nil }
+            t.expectEqual(result.status, 0, "resolve --keep-running (\(label)) succeeds")
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let supported = keepConfig(terminal: "iterm2")
+        t.expectEqual(keepRunning(keepDirs[0], config: supported, label: "supported"), "true", "no key anywhere resolves to the default, on")
+        t.expectEqual(keepRunning(keepDirs[1], config: supported, label: "supported"), "false", "the folder's own off wins")
+        t.expectEqual(keepRunning(keepDirs[2], config: supported, label: "supported"), "true", "the folder's own on")
+        t.expectEqual(
+            keepRunning(keepDirs[0], config: keepConfig(terminal: "ghostty"), label: "unsupported"), "n/a",
+            "a terminal that cannot keep a session running is not applicable"
+        )
+
+        // What the popover would carry: the same resolver call over the same layers.
+        let registry = ManifestRegistry(bundledRoot: ResourceRoot.bundled(), userRoot: nil)
+        registry.load()
+        if let agent = registry.agent(id: "claude-code") {
+            let viaResolver = PresetResolver.resolve(
+                global: Preset(agent: "claude-code", terminal: "iterm2"), folder: Preset(keepRunning: false),
+                oneShot: Preset(), agent: agent
+            )
+            t.expectEqual(viaResolver.keepRunning, false, "the resolver the popover uses agrees with what the CLI printed for the off folder")
+        }
+
+        // With no terminal anywhere, the fallback is the first verified
+        // terminal the CONFIG leaves enabled (the app's rule:
+        // `terminalState[id]?.enabled ?? manifest.enabled`), not the first
+        // the manifests enable.
+        if let agent = registry.agent(id: "claude-code") {
+            func expected(_ states: [String: Bool], folderKeep: Bool?) -> String {
+                let terminalID = registry.terminals.first { (states[$0.id] ?? $0.enabled) && !$0.unverified }?.id
+                let resolved = PresetResolver.resolve(
+                    global: Preset(agent: "claude-code"), folder: Preset(keepRunning: folderKeep),
+                    oneShot: Preset(), agent: agent, terminalID: terminalID
+                )
+                switch resolved.keepRunning {
+                case .some(let value): return value ? "true" : "false"
+                case .none: return "n/a"
+                }
+            }
+
+            t.expectEqual(
+                keepRunning(keepDirs[1], config: keepConfig(terminal: nil), label: "fallback-default"),
+                expected([:], folderKeep: false),
+                "no terminal anywhere: the fallback terminal is the resolver's answer for the first enabled, verified one"
+            )
+
+            // The config disables every terminal that could keep a session running.
+            let offConfig = keepConfig(
+                terminal: nil,
+                extra: "[terminals.iterm2]\nenabled = false\n\n[terminals.terminal-app]\nenabled = false"
+            )
+            let printedOff = keepRunning(keepDirs[2], config: offConfig, label: "fallback-config-disables")
+            t.expectEqual(
+                printedOff, expected(["iterm2": false, "terminal-app": false], folderKeep: true),
+                "a terminal the config disables is not a fallback candidate"
+            )
+            t.expectEqual(printedOff, "n/a", "with both supported terminals off in the config there is none, where the manifest flag alone printed true")
+
+            // Enabling the one terminal that ships disabled does not rescue
+            // it: Ghostty is also unverified, and the fallback skips those.
+            let ghosttyOn = keepConfig(
+                terminal: nil,
+                extra: "[terminals.iterm2]\nenabled = false\n\n[terminals.terminal-app]\nenabled = false\n\n[terminals.ghostty]\nenabled = true"
+            )
+            t.expectEqual(
+                keepRunning(keepDirs[2], config: ghosttyOn, label: "fallback-unverified-stays-out"),
+                expected(["iterm2": false, "terminal-app": false, "ghostty": true], folderKeep: true),
+                "an unverified terminal stays out of the fallback even when the config enables it"
+            )
+        }
+
+        // The existing modes print exactly what they printed before the field.
+        let path = dir.path("keep-supported.toml")
+        let profileOut = t.attempt("resolve --profile beside keep_running") {
+            try runCLI(binary, ["resolve", keepDirs[1], "--profile"], env: ["AGENTMENU_CONFIG": path])
+        }
+        t.expectEqual(profileOut?.stdout, "", "an unpinned folder still prints nothing for --profile: keep_running adds no output to it")
+    }
+
     // 4. resolve --command on an UNPINNED folder must match
     // `PopoverModel.profileID(for:)` — `target.profileID ?? activeProfileID`
     // — and never fall back to `config.defaults.profile`, which the app

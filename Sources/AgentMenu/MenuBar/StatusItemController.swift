@@ -27,6 +27,11 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     /// rate that file is written: the status-line bridge throttles itself to
     /// once a minute, and reading faster than it writes buys nothing.
     private var indicatorTimer: Timer?
+    /// Sessions waiting on the user, across every account (R7). Held here,
+    /// taken from the model's own publish, because `@Published` fires before
+    /// the model's property holds the new value: reading it back inside the
+    /// subscription would always show the count one change ago.
+    private var needsYouCount = 0
     private var cancellables: Set<AnyCancellable> = []
     /// Used to anchor the popover when the status item's own window is not
     /// somewhere a popover can point at. See `anchor()`.
@@ -82,6 +87,21 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         environment.$updatePending
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.refreshIndicator() }
+            }
+            .store(in: &cancellables)
+
+        // The Needs-you count is the model's, and it changes when a session's
+        // registry file does, not when a timer fires: the badge is for the
+        // moment something starts waiting on you while you are in another
+        // window. `removeDuplicates` because the model republishes the count
+        // with every change to the list, and most of those leave it alone.
+        environment.sessions.$badgeCount
+            .removeDuplicates()
+            .sink { [weak self] count in
+                MainActor.assumeIsolated {
+                    self?.needsYouCount = count
+                    self?.refreshIndicator()
+                }
             }
             .store(in: &cancellables)
 
@@ -155,16 +175,26 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         let config = environment.config
         let profile = config.profiles.first { $0.id == config.activeProfileID } ?? config.profiles.first
 
+        // Empty at a count of zero, so every title below is then exactly what
+        // it was before sessions had a badge.
+        let needsYou = MenuBarIcon.needsYouBadge(count: needsYouCount)
+        // What the item draws, not what the model holds: nothing is drawn at
+        // a count of zero, so the badge's own length is the test. A no-op
+        // unless the harness journal is on.
+        HarnessJournal.shared.badgeShown(count: needsYou.length > 0 ? needsYouCount : 0)
+
         guard let profile,
               case .available(let snapshot) = environment.usage(forProfile: profile),
               let alert = UsageAlert.worst(in: snapshot, staleAfter: UsageReader.defaultStaleAfter) else {
-            button.attributedTitle = updateBadge(before: NSAttributedString(string: ""))
+            button.attributedTitle = updateBadge(before: needsYou)
             button.toolTip = tooltip(base: "AgentMenu — start an agent session")
             return
         }
 
         let name = profile.name.isEmpty ? profile.id : profile.name
-        button.attributedTitle = updateBadge(before: MenuBarIcon.badge(for: alert, snapshot: snapshot))
+        let title = NSMutableAttributedString(attributedString: needsYou)
+        title.append(MenuBarIcon.badge(for: alert, snapshot: snapshot))
+        button.attributedTitle = updateBadge(before: title)
         button.toolTip = tooltip(base: MenuBarIcon.tooltip(for: alert, profileName: name))
     }
 
@@ -186,7 +216,10 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     private func tooltip(base: String) -> String {
-        environment.updatePending ? base + "\nAn update is ready to install." : base
+        var text = base
+        if let sessions = SessionBadge.tooltip(count: needsYouCount) { text += "\n" + sessions }
+        if environment.updatePending { text += "\nAn update is ready to install." }
+        return text
     }
 
     /// Left-click opens the popover, right-click (and control-click, the same
@@ -263,10 +296,19 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         NSApp.terminate(nil)
     }
 
+    /// Opens the popover on the Sessions tab and selects Live or Closed. After
+    /// `show()`, not before: `popoverWillOpen()` puts the tab and the mode back
+    /// to what an open shows.
+    func showSessions(mode: SessionsMode) {
+        if !popover.isShown { show() }
+        environment.popover.selectTab(.sessions)
+        environment.sessions.setMode(mode)
+    }
+
     func show() {
         guard let button = statusItem.button else { return }
 
-        environment.popover.refresh()
+        environment.popover.popoverWillOpen()
         refreshIndicator()
         let (anchorView, anchorRect) = anchor(for: button)
         // An accessory app that never activates gets no mouse-moved events, and
@@ -357,5 +399,6 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
 
     func popoverDidClose(_ notification: Notification) {
         removeOutsideClickMonitor()
+        environment.popover.popoverDidClose()
     }
 }

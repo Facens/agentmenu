@@ -73,11 +73,25 @@ Settings toggle will opt a copy into betas instead.
 - **A launch is a full command**, with the agent binary's absolute path and an
   environment prefix. It never depends on a shell alias or a shell function, so
   it works regardless of how your shell is set up.
-- **It never writes to your agent's configuration.** AgentMenu reads
-  `settings.json` once to seed its defaults and otherwise leaves your agent
-  directories alone. The single exception is the status-line bridge, which
-  you install deliberately from Settings, and which names the file and the
-  key it changes before writing.
+- **It writes into an agent's configuration only what it names, only when you
+  ask, and removes it on request.** Today that is one thing: the status-line
+  bridge, which you install deliberately from Settings → Accounts. Installing
+  writes `agentmenu-statusline.sh` into that account's configuration directory
+  and sets one key, `statusLine.command`, in its `settings.json`; the dialog
+  names both before anything is written, and every other key in the file is
+  left as it is. Once installed, the bridge writes two more files beside them,
+  `tb-rate-snapshot.json` and `tb-rate-history.jsonl`. AgentMenu otherwise
+  reads `settings.json` once, to seed its defaults. **Sessions are read, never
+  written:** the session registry (`sessions/<pid>.json`) and the transcripts
+  (`projects/`) that Claude Code keeps are opened read-only, and AgentMenu adds
+  nothing to either. **Removing the bridge** is the **Remove** button next to
+  Install in Settings → Accounts, and it takes all of it back out: the dialog names the three files and the key, then it
+  deletes the files and sets `statusLine.command` back to the status line you
+  had before (or removes `statusLine` if you had none). If you changed
+  `statusLine.command` after installing, it refuses and touches nothing.
+- **Sessions, not just launches.** A second tab lists the agent sessions
+  running on this Mac, what each one is doing, and which ones are waiting for
+  you. See [Sessions](#sessions).
 
 ### Agents and terminals
 
@@ -118,7 +132,7 @@ Install it from **Settings → Accounts**, per account. It writes the bridge
 script into that profile's configuration directory and points `statusLine` at
 it. If you already have a status-line command, the bridge **calls yours and
 passes its stdin through**, so your status line keeps working — installing is
-additive, not a replacement.
+additive, not a replacement. **Remove** in the same place undoes it.
 
 Two consequences worth knowing:
 
@@ -126,6 +140,27 @@ Two consequences worth knowing:
   an agent session runs, throttled to once a minute. After an idle evening it is
   hours old, and AgentMenu shows that age rather than pretending.
 - With no snapshot for an account, the readout is hidden entirely.
+
+## Sessions
+
+The popover has two tabs, Launch and Sessions, and it always opens on Launch.
+Sessions lists every Claude Code session running on this Mac, grouped by
+folder, each marked Working, Needs you, Your turn or Unknown. Click a row and
+its Terminal or iTerm2 tab comes to the front. Quit, rename and reopen are in
+the row and header menus, and a closed session can be reopened later.
+
+Sessions launched from AgentMenu can **keep running when the window closes**.
+That is on by default and is a preset field you can turn off per folder or for
+one launch. It runs the agent under a small tmux that ships inside the app and
+is separate from any tmux of yours.
+
+AgentMenu learns about sessions by reading the files Claude Code already keeps.
+It does not write to them. Other agents are listed with process-level status
+only: running, or not.
+
+[docs/sessions.md](docs/sessions.md) covers the tab, keep running (including a
+Shift+Enter limit in Terminal.app), restore, notifications, the macOS
+permissions involved, and where AgentMenu keeps its own state.
 
 ## 🔎 "I installed it and nothing appeared"
 
@@ -147,7 +182,7 @@ bridge. That is reversed: nothing puts `agentmenu` on your `PATH`, and there
 is no supported way to type it yourself.
 
 The CLI at `Contents/Resources/bin/agentmenu`, inside the app bundle, still
-exists, but it is internal. The app invokes it itself — to install the
+exists, but it is internal. The app invokes it itself — to install or remove the
 status-line bridge — and the bridge script it writes invokes it again on every
 refresh.
 
@@ -223,8 +258,13 @@ Three more things worth knowing before you switch it on:
   could also have set the key in the first place. The point is that the app
   writes nothing outside that one directory.
 
-**Nothing listens.** There is no socket, no port and no network traffic; the
-journal is a file, and the only way to read it is to read it.
+**Nothing listens.** The journal opens no socket, no port and no network
+traffic; it is a file, and the only way to read it is to read it. The one
+socket AgentMenu does create is separate from the journal: the bundled tmux
+that keeps sessions running talks over a Unix socket file under
+`~/Library/Application Support/dev.facens.agentmenu/host/`, in a directory you
+own. It is a local path, not a port, and nothing on the network can reach it.
+See [docs/sessions.md](docs/sessions.md).
 
 **Every control this exercises carries a stable accessibility identifier.**
 The harness drives the built app by `AXIdentifier` alone — never a

@@ -65,6 +65,9 @@ struct PresetOptions: Equatable {
     var permissionMode: [String]?
     var advisor: [String]?
     var canDisableAdvisor: Bool = false
+    /// Whether this agent and terminal can keep a session running when its
+    /// window closes (R15); the control is hidden otherwise.
+    var keepRunning: Bool = false
     var agents: [(id: String, name: String)] = []
     var terminals: [(id: String, name: String)] = []
     /// The manifest's permission spec, so every surface asks it the R37
@@ -80,7 +83,7 @@ struct PresetOptions: Equatable {
     static func == (lhs: PresetOptions, rhs: PresetOptions) -> Bool {
         lhs.model == rhs.model && lhs.effort == rhs.effort
             && lhs.permissionMode == rhs.permissionMode && lhs.advisor == rhs.advisor
-            && lhs.canDisableAdvisor == rhs.canDisableAdvisor
+            && lhs.canDisableAdvisor == rhs.canDisableAdvisor && lhs.keepRunning == rhs.keepRunning
             && lhs.agents.map(\.id) == rhs.agents.map(\.id)
             && lhs.terminals.map(\.id) == rhs.terminals.map(\.id)
             && lhs.permission == rhs.permission

@@ -31,6 +31,19 @@ private func rankedFixtureAgent() -> AgentManifest {
     fixtureAgent(advisorRankOrder: ["sonnet", "opus"])
 }
 
+/// The fixture agent is not Claude Code, so every resolution of it also
+/// records the keep-running adjustment; the advisor scenarios look only at
+/// the advisor's.
+private func advisorAdjustments(_ resolved: ResolvedPreset) -> [AdjustedValue] {
+    resolved.adjusted.filter { $0.field == .advisor }
+}
+
+/// An agent manifest with Claude Code's id, the one keep-running is supported
+/// for. Nothing else about it matters to these scenarios.
+private func keepRunningAgent() -> AgentManifest {
+    AgentManifest(id: "claude-code", displayName: "Claude Code", binary: "claude", origin: .bundled)
+}
+
 func runPresetResolverTests(_ t: TestRunner) {
     t.suite("PresetResolver")
 
@@ -151,7 +164,9 @@ func runPresetResolverTests(_ t: TestRunner) {
         let preset = Preset(model: "not-a-real-model", effort: "turbo", permissionMode: "yolo", advisor: .model("nope"))
         let resolved = PresetResolver.resolve(global: preset, folder: Preset(), oneShot: Preset(), agent: nil)
 
-        t.expectEqual(resolved.preset, preset, "with no manifest to validate against, the merge result is returned as-is")
+        var expected = preset
+        expected.keepRunning = Preset.keepRunningDefault
+        t.expectEqual(resolved.preset, expected, "with no manifest to validate against, the merge result is returned as-is, plus the keep-running default")
         t.expectEqual(resolved.unsupported, [], "nothing can be reported unsupported without a manifest to name in the reason")
     }
 
@@ -183,8 +198,8 @@ func runPresetResolverTests(_ t: TestRunner) {
         t.expectEqual(resolved.preset.advisor, .model("opus"), "sonnet cannot advise opus, so the advisor is raised to opus")
         t.expectEqual(resolved.preset.model, "opus", "the main model is untouched — the advisor moves, never the model")
         t.expectEqual(resolved.unsupported, [], "a raised value is not an unsupported one: the flag still reaches the binary")
-        t.expectEqual(resolved.adjusted.count, 1, "exactly one adjustment reported")
-        if let first = resolved.adjusted.first {
+        t.expectEqual(advisorAdjustments(resolved).count, 1, "exactly one advisor adjustment reported")
+        if let first = advisorAdjustments(resolved).first {
             t.expectEqual(first.field, .advisor, "the adjustment names the advisor field")
             t.expectEqual(first.from, "sonnet", "it carries the value the user chose")
             t.expectEqual(first.to, "opus", "it carries the value that will be sent")
@@ -199,13 +214,13 @@ func runPresetResolverTests(_ t: TestRunner) {
             global: Preset(model: "opus", advisor: .model("opus")), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
         )
         t.expectEqual(atSameRank.preset.advisor, .model("opus"), "equal ranks pair — verified against the real binary, not inferred")
-        t.expectEqual(atSameRank.adjusted, [], "nothing to adjust")
+        t.expectEqual(advisorAdjustments(atSameRank), [], "nothing to adjust")
 
         let above = PresetResolver.resolve(
             global: Preset(model: "sonnet", advisor: .model("opus")), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
         )
         t.expectEqual(above.preset.advisor, .model("opus"), "a stronger advisor stands")
-        t.expectEqual(above.adjusted, [], "nothing to adjust")
+        t.expectEqual(advisorAdjustments(above), [], "nothing to adjust")
     }
 
     // MARK: 14. R50 — a manifest that declares no ranks accepts every pairing
@@ -215,7 +230,7 @@ func runPresetResolverTests(_ t: TestRunner) {
             global: Preset(model: "opus", advisor: .model("sonnet")), folder: Preset(), oneShot: Preset(), agent: fixtureAgent()
         )
         t.expectEqual(resolved.preset.advisor, .model("sonnet"), "with no declared order, no pairing is refused and nothing is raised")
-        t.expectEqual(resolved.adjusted, [], "nothing to adjust")
+        t.expectEqual(advisorAdjustments(resolved), [], "nothing to adjust")
     }
 
     // MARK: 15. R50 — with no effective main model there is nothing to compare, so the advisor stands
@@ -225,7 +240,7 @@ func runPresetResolverTests(_ t: TestRunner) {
             global: Preset(advisor: .model("sonnet")), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
         )
         t.expectEqual(resolved.preset.advisor, .model("sonnet"), "the agent's own default model is unknown here, so the advisor is left as chosen")
-        t.expectEqual(resolved.adjusted, [], "nothing to adjust")
+        t.expectEqual(advisorAdjustments(resolved), [], "nothing to adjust")
     }
 
     // MARK: 16. R50 — an advisor turned off stays off; raising applies to a chosen model only
@@ -235,7 +250,7 @@ func runPresetResolverTests(_ t: TestRunner) {
             global: Preset(model: "opus", advisor: .off), folder: Preset(), oneShot: Preset(), agent: rankedFixtureAgent()
         )
         t.expectEqual(resolved.preset.advisor, .off, "off is a choice, not a weak advisor")
-        t.expectEqual(resolved.adjusted, [], "nothing to adjust")
+        t.expectEqual(advisorAdjustments(resolved), [], "nothing to adjust")
     }
 
     // MARK: 17. R50 — when the main model is not itself an advisor value, the weakest advisor that reaches its class wins
@@ -258,8 +273,8 @@ func runPresetResolverTests(_ t: TestRunner) {
         )
 
         t.expectEqual(resolved.preset.advisor, .model("large"), "large is the cheapest advisor that reaches huge's class; enormous overshoots")
-        t.expectEqual(resolved.adjusted.first?.from, "medium", "the adjustment carries the chosen value")
-        t.expectEqual(resolved.adjusted.first?.to, "large", "and the value that replaces it")
+        t.expectEqual(advisorAdjustments(resolved).first?.from, "medium", "the adjustment carries the chosen value")
+        t.expectEqual(advisorAdjustments(resolved).first?.to, "large", "and the value that replaces it")
     }
 
     // MARK: 18. R50 — an unsupported advisor is still dropped, never raised
@@ -270,6 +285,70 @@ func runPresetResolverTests(_ t: TestRunner) {
         )
         t.expect(resolved.preset.advisor == nil, "haiku is not a declared advisor value, so it is stripped before any ranking applies")
         t.expectEqual(resolved.unsupported.first?.field, .advisor, "reported unsupported")
-        t.expectEqual(resolved.adjusted, [], "a stripped value is not an adjusted one")
+        t.expectEqual(advisorAdjustments(resolved), [], "a stripped value is not an adjusted one")
+    }
+
+    // MARK: 19. R15 — keep running: default on, folder off, one-shot on beats folder off
+
+    do {
+        let claude = keepRunningAgent()
+
+        let unset = PresetResolver.resolve(global: Preset(terminal: "iterm2"), folder: Preset(), oneShot: Preset(), agent: claude)
+        t.expectEqual(unset.keepRunning, true, "global unset and nothing below it: the effective default is on")
+        t.expectEqual(unset.adjusted, [], "a supported pairing records no adjustment")
+
+        let folderOff = PresetResolver.resolve(
+            global: Preset(terminal: "iterm2"), folder: Preset(keepRunning: false), oneShot: Preset(), agent: claude
+        )
+        t.expectEqual(folderOff.keepRunning, false, "global unset and folder off: off")
+
+        let shotOn = PresetResolver.resolve(
+            global: Preset(terminal: "iterm2", keepRunning: true), folder: Preset(keepRunning: false),
+            oneShot: Preset(keepRunning: true), agent: claude
+        )
+        t.expectEqual(shotOn.keepRunning, true, "a one-shot on overrides the folder's off")
+
+        let globalOff = PresetResolver.resolve(
+            global: Preset(terminal: "terminal-app", keepRunning: false), folder: Preset(), oneShot: Preset(), agent: claude
+        )
+        t.expectEqual(globalOff.keepRunning, false, "a global off is inherited by a folder that says nothing")
+
+        let folderOn = PresetResolver.resolve(
+            global: Preset(terminal: "terminal-app", keepRunning: false), folder: Preset(keepRunning: true), oneShot: Preset(), agent: claude
+        )
+        t.expectEqual(folderOn.keepRunning, true, "a folder on overrides a global off")
+        t.expectEqual(folderOn.preset.keepRunning, true, "and the resolved preset carries the same value")
+    }
+
+    // MARK: 20. R15 — an unsupported agent or terminal resolves keep-running as not applicable, recorded as adjusted
+
+    do {
+        let other = PresetResolver.resolve(
+            global: Preset(terminal: "iterm2"), folder: Preset(), oneShot: Preset(), agent: fixtureAgent()
+        )
+        t.expectEqual(other.keepRunning, nil, "a non-Claude agent has nothing to keep running")
+        let adjustment = other.adjusted.first { $0.field == .keepRunning }
+        t.expectEqual(adjustment?.from, "on", "the adjustment carries the effective value that was asked for")
+        t.expectEqual(adjustment?.to, "not applicable", "and says it does not apply")
+        t.expect(adjustment?.reason.contains("fixture-agent") ?? false, "the reason names the agent: \(adjustment?.reason ?? "nil")")
+
+        let ghostty = PresetResolver.resolve(
+            global: Preset(terminal: "ghostty", keepRunning: false), folder: Preset(), oneShot: Preset(), agent: keepRunningAgent()
+        )
+        t.expectEqual(ghostty.keepRunning, nil, "a terminal outside the supported set is not applicable, even when the user chose off")
+        t.expectEqual(ghostty.adjusted.first { $0.field == .keepRunning }?.from, "off", "the adjustment records the off that was asked for")
+
+        let noTerminal = PresetResolver.resolve(global: Preset(), folder: Preset(), oneShot: Preset(), agent: keepRunningAgent())
+        t.expectEqual(noTerminal.keepRunning, nil, "no terminal, nowhere to keep anything running")
+
+        let explicitTerminal = PresetResolver.resolve(
+            global: Preset(), folder: Preset(), oneShot: Preset(), agent: keepRunningAgent(), terminalID: "terminal-app"
+        )
+        t.expectEqual(explicitTerminal.keepRunning, true, "a caller that resolved the terminal itself (the app's fallback) is judged on that terminal")
+
+        t.expect(KeepRunningSupport.supports(agentID: "claude-code", terminalID: "terminal-app"), "Terminal.app supports it")
+        t.expect(KeepRunningSupport.supports(agentID: "claude-code", terminalID: "iterm2"), "iTerm2 supports it")
+        t.expect(!KeepRunningSupport.supports(agentID: "claude-code", terminalID: "ghostty"), "Ghostty does not, yet")
+        t.expect(!KeepRunningSupport.supports(agentID: "codex", terminalID: "iterm2"), "another agent does not")
     }
 }

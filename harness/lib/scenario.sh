@@ -751,6 +751,38 @@ dialog() {
             local json
             json="$(_dialogs answer "$kind" "$choice" "$@")" || _scenario_harness_error "dialog: could not reach the guest to answer the $kind dialog."
             _scenario_check_kind "answering the $kind dialog with $choice" "$json"
+            # A press is not an answer until the dialog is gone. macOS 26's
+            # screen-recording approval prompt is raised by a capture and
+            # lands a moment later, so the `shot` a scenario takes of a TCC
+            # sheet can put it ON TOP of that sheet just before this press —
+            # and a TCC sheet that is not frontmost ignores the press
+            # silently. The sheet then stays up, the app's Apple Event waits
+            # on consent, and the run fails 120s later as "the terminal did
+            # not answer" (launch-terminal, 2026-10-01; reproduced by raising
+            # the screen-recording prompt over the Terminal prompt on
+            # purpose). So for the TCC kinds: check, clear the
+            # screen-recording prompt, press once more, and refuse to report
+            # an answer that did not land. Not for "alert" (its fallback
+            # matches any frontmost window) or "gatekeeper"/"screenrecording"
+            # (nothing covers them).
+            case "$kind" in
+                automation|calendar)
+                    local _left _try
+                    for _try in 1 2; do
+                        sleep 1
+                        _left="$(_dialogs wait "$kind" 0 "$@" 2>/dev/null | jq -r '.present // empty' 2>/dev/null)"
+                        [ "$_left" = "true" ] || break
+                        log "$kind dialog: still on screen after the press; clearing the screen-recording prompt and pressing again"
+                        _scenario_clear_screenrecording
+                        json="$(_dialogs answer "$kind" "$choice" "$@")" || _scenario_harness_error "dialog: could not reach the guest to answer the $kind dialog."
+                        _scenario_check_kind "answering the $kind dialog with $choice" "$json"
+                    done
+                    if [ "$_left" = "true" ]; then
+                        _left="$(_dialogs wait "$kind" 0 "$@" 2>/dev/null | jq -r '.present // empty' 2>/dev/null)"
+                        [ "$_left" = "true" ] && _scenario_harness_error "dialog: the $kind dialog is still on screen after three presses of $choice; macOS did not take the answer."
+                    fi
+                    ;;
+            esac
             _scenario_record_evidence "$json"
             # The authoritative record of what was actually pressed. A scenario
             # that narrates its own "was answered Open" is stating an intention;

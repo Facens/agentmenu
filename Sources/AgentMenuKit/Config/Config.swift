@@ -157,6 +157,35 @@ public struct Config: Equatable {
     /// `Settings` › General toggle (`GeneralPane.swift`) is the only way to
     /// change it, the same as it always was.
     public var launchAtLoginAsked: Bool
+    /// Whether macOS has ever been asked to let AgentMenu post notifications
+    /// (KTD15). Written `true` the moment the question is put — on the first
+    /// launch AgentMenu makes or the first open of the Sessions tab, whichever
+    /// comes first — whatever the answer: the answer itself lives with macOS
+    /// (`UNUserNotificationCenter`), and this key only records that nobody
+    /// needs to be asked again. It is a key of its own so a harness fixture
+    /// can plant it and never meet a prompt the shared dialog script cannot
+    /// answer (KTD16).
+    public var notificationsAsked: Bool
+    /// Whether the user has ever been asked "reopen sessions at login?" (R25) —
+    /// in the post-restart banner, the first time a restore was offered after a
+    /// restart — or has decided it in Settings › General. Either answer counts.
+    /// Written `true` once answered and absent until then, like
+    /// `launchAtLoginAsked`.
+    public var reopenAtLoginAsked: Bool
+    /// Settings › General › "Reopen sessions at login" (R25): when AgentMenu
+    /// starts after the Mac restarted, the pending reopen set is restored without
+    /// waiting for a click. OFF until the user answers, so the file spells only
+    /// the exception: `reopen_at_login = true`.
+    public var reopenAtLogin: Bool
+    /// Settings › General › "Notify when a session needs you" (R32). ON by
+    /// default, so the file spells only the exception: the key is written as
+    /// `false` when the user turns it off and is absent otherwise.
+    public var notifyNeedsYou: Bool
+    /// Settings › General › "Notify when a session you launched finishes its
+    /// turn" (R33): an owned session entering Your turn after a turn of at
+    /// least 30 seconds. ON by default and spelled like `notifyNeedsYou`:
+    /// only the exception is written, as `notify_your_turn = false`.
+    public var notifyYourTurn: Bool
     public var defaults: Preset
     public var profiles: [Profile]
     public var folders: [FolderTarget]
@@ -187,6 +216,11 @@ public struct Config: Equatable {
         activeProfileID = nil
         firstRunCompleted = false
         launchAtLoginAsked = false
+        notificationsAsked = false
+        reopenAtLoginAsked = false
+        reopenAtLogin = false
+        notifyNeedsYou = true
+        notifyYourTurn = true
         defaults = Preset()
         profiles = []
         folders = []

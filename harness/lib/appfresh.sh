@@ -7,7 +7,8 @@
 # "Shared files" section, excludes it and snapshot.sh by name): it is the
 # one file in harness/lib/ allowed to know AgentMenu's bundle identifier
 # (dev.facens.agentmenu), its harness launch argument (-AgentMenuHarness
-# YES) and the five KTD4 override variables
+# YES) and the seven override variables — the five KTD4 ones,
+# AGENTMENU_SESSION_STORE and AGENTMENU_SESSION_HOST_DIR
 # (Sources/AgentMenuKit/Config/Overrides.swift). MeetingHop's own copy
 # carries the same shape under -MeetingHopDefaultsSuite /
 # -MeetingHopHarnessDir.
@@ -31,6 +32,24 @@
 #   <tempdir>/manifests/           AGENTMENU_MANIFESTS_USER_ROOT
 #   <tempdir>/profile/             AGENTMENU_PROFILE_ROOT
 #   <tempdir>/harness/             AGENTMENU_HARNESS_DIR (the journal lands here)
+#   <tempdir>/sessions/sessions.json   AGENTMENU_SESSION_STORE (the session
+#                                  manager's renames; the app's own file under
+#                                  ~/Library/Application Support/<bundle id>/
+#                                  is what snapshot.sh's "appsupport" root
+#                                  guards, so a run that wrote there would fail
+#                                  the snapshot check)
+#   /tmp/amh.<8 hex>/              AGENTMENU_SESSION_HOST_DIR (the session
+#                                  host: the helper copies, the tmux.conf and
+#                                  the server's socket `s`). NOT under the
+#                                  isolated root: a Unix socket path is
+#                                  limited to 103 bytes and $TMPDIR on macOS
+#                                  (/var/folders/..../T/) plus the root's own
+#                                  name already uses most of them, so this
+#                                  one is a short sibling under /tmp. It is
+#                                  the only place a run may leave a tmux
+#                                  server, and teardown kills that server by
+#                                  its own socket before removing the
+#                                  directory — never any other tmux.
 #
 # plus a per-run UserDefaults suite (AGENTMENU_DEFAULTS_SUITE), named
 # dev.facens.agentmenu.harness.<run-id> — never dev.facens.agentmenu itself —
@@ -41,11 +60,12 @@
 # so it cannot itself reach a real launch (R3: "the same override mechanism
 # must not let anything other than the harness redirect a real launch").
 #
-# Three breadcrumbs are written into the run directory before the thing they
-# name exists — the same discipline provision_stranger uses for clone.name
-# in run.sh: appfresh.tempdir, appfresh.suite, appfresh.pid. A crash between
-# naming and creating leaves appfresh_clean something to correlate; a crash
-# after still leaves it something to delete.
+# Four breadcrumbs are written into the run directory naming what they
+# refer to — the same discipline provision_stranger uses for clone.name in
+# run.sh: appfresh.tempdir, appfresh.hostdir, appfresh.suite, appfresh.pid.
+# appfresh.hostdir is written BEFORE the directory it names is created. A
+# crash between naming and creating leaves appfresh_clean something to
+# correlate; a crash after still leaves it something to delete.
 #
 # On this tier the harness directory is relocated, so appfresh_prepare sets
 # HARNESS_GUEST_JOURNAL itself rather than letting a scenario call
@@ -211,6 +231,37 @@ appfresh_quit() {
 }
 
 # ---------------------------------------------------------------------------
+# The session host directory of one run: stop the tmux server living there,
+# then remove the directory. The server is addressed by its own socket,
+# `<hostdir>/s`, through the helper copy the app put next to it
+# (`<hostdir>/tmux`) — never through a bare `tmux` and never through any
+# socket but that one, so the maintainer's own tmux is out of reach. A
+# directory that does not look like one this file made (`/tmp/amh.*`, a real
+# directory, not a symlink) is left alone: the breadcrumb is a file on disk,
+# and a corrupted one must not become an `rm -rf` of something else. Missing
+# helper, missing socket or a server that is already gone are all fine.
+_appfresh_is_host_dir() {
+    local hostdir="$1"
+    case "$hostdir" in
+        /tmp/amh.?*) ;;
+        *) return 1 ;;
+    esac
+    case "$hostdir" in
+        */../*|*/..) return 1 ;;
+    esac
+    [ -d "$hostdir" ] && [ ! -L "$hostdir" ]
+}
+
+_appfresh_remove_host() {
+    local hostdir="$1"
+    _appfresh_is_host_dir "$hostdir" || return 0
+    if [ -x "$hostdir/tmux" ] && [ -S "$hostdir/s" ]; then
+        "$hostdir/tmux" -S "$hostdir/s" kill-server > /dev/null 2>&1 || true
+    fi
+    rm -rf "$hostdir"
+}
+
+# ---------------------------------------------------------------------------
 # appfresh_prepare <run-dir>
 #
 # Everything run.sh's prepare_app_fresh() needs before run_scenario(): the
@@ -243,8 +294,22 @@ appfresh_prepare() {
     fi
     printf '%s\n' "$tmproot" > "$run_dir/appfresh.tempdir"
 
-    if ! mkdir -p "$tmproot/config" "$tmproot/manifests" "$tmproot/profile" "$tmproot/harness"; then
+    if ! mkdir -p "$tmproot/config" "$tmproot/manifests" "$tmproot/profile" "$tmproot/harness" "$tmproot/sessions"; then
         warn "app-fresh: could not create the isolated root's subdirectories."
+        return 1
+    fi
+
+    # The session host directory: short, and named in a breadcrumb BEFORE it
+    # exists (see the header). `mkdir` without -p refuses a name that is
+    # already taken, so a stale directory is never adopted.
+    local hostdir
+    hostdir="/tmp/amh.$(uuidgen | tr -d '-' | cut -c1-8 | tr 'A-F' 'a-f')"
+    printf '%s\n' "$hostdir" > "$run_dir/appfresh.hostdir"
+    if ! mkdir -m 700 "$hostdir"; then
+        # Not ours: do not leave a breadcrumb that would have teardown stop
+        # and remove somebody else's directory.
+        rm -f "$run_dir/appfresh.hostdir"
+        warn "app-fresh: could not create the session host directory $hostdir."
         return 1
     fi
 
@@ -270,6 +335,8 @@ appfresh_prepare() {
     AGENTMENU_PROFILE_ROOT="$tmproot/profile" \
     AGENTMENU_DEFAULTS_SUITE="$suite" \
     AGENTMENU_HARNESS_DIR="$tmproot/harness" \
+    AGENTMENU_SESSION_STORE="$tmproot/sessions/sessions.json" \
+    AGENTMENU_SESSION_HOST_DIR="$hostdir" \
         "$binary" -AgentMenuHarness YES > "$run_dir/appfresh.app.log" 2>&1 &
     local app_pid=$! app_token
     # PID plus its own start token, the same pairing common.sh's own
@@ -302,7 +369,7 @@ appfresh_prepare() {
 appfresh_teardown() {
     local run_dir="${HARNESS_RUN_DIR:?appfresh_teardown needs HARNESS_RUN_DIR.}"
     local ok=0
-    local pid suite tempdir
+    local pid suite tempdir hostdir
 
     if [ -f "$run_dir/appfresh.pid" ]; then
         pid="$(head -n 1 "$run_dir/appfresh.pid" 2>/dev/null || true)"
@@ -325,6 +392,12 @@ appfresh_teardown() {
             defaults delete "$suite" > /dev/null 2>&1 || true
             rm -f "$(_appfresh_prefs_dir)/$suite.plist"
         fi
+    fi
+
+    # After the app is gone, so nothing starts a server behind this.
+    if [ -f "$run_dir/appfresh.hostdir" ]; then
+        hostdir="$(head -n 1 "$run_dir/appfresh.hostdir" 2>/dev/null || true)"
+        _appfresh_remove_host "$hostdir"
     fi
 
     if snapshot_take "$run_dir/appfresh.snapshot.after"; then
@@ -391,7 +464,7 @@ _appfresh_run_alive() {
 
 _appfresh_clean_one() {
     local dir="$1" dry_run="$2"
-    local pid token suite plist tempdir
+    local pid token suite plist tempdir hostdir
 
     if [ -f "$dir/appfresh.pid" ]; then
         pid="$(sed -n '1p' "$dir/appfresh.pid" 2>/dev/null || true)"
@@ -407,6 +480,20 @@ _appfresh_clean_one() {
             else
                 echo "stopping orphaned app-fresh process $pid ($dir)"
                 appfresh_quit "$pid" || true
+            fi
+        fi
+    fi
+
+    # Before the root below, and after the process above: a server a killed
+    # run left is stopped by its own socket, then its directory goes.
+    if [ -f "$dir/appfresh.hostdir" ]; then
+        hostdir="$(head -n 1 "$dir/appfresh.hostdir" 2>/dev/null || true)"
+        if _appfresh_is_host_dir "$hostdir"; then
+            if [ "$dry_run" -eq 1 ]; then
+                echo "would stop and remove leftover session host $hostdir ($dir)"
+            else
+                echo "removing leftover session host $hostdir ($dir)"
+                _appfresh_remove_host "$hostdir"
             fi
         fi
     fi

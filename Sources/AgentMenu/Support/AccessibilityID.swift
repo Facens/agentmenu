@@ -40,6 +40,7 @@ extension AccessibilityID.Popover {
     static func overrideEffort(_ target: LaunchTarget) -> String { overrideEffort(rowKey: rowKey(target)) }
     static func overridePermission(_ target: LaunchTarget) -> String { overridePermission(rowKey: rowKey(target)) }
     static func overrideAdvisor(_ target: LaunchTarget) -> String { overrideAdvisor(rowKey: rowKey(target)) }
+    static func overrideKeepRunning(_ target: LaunchTarget) -> String { overrideKeepRunning(rowKey: rowKey(target)) }
     static func overrideAgent(_ target: LaunchTarget) -> String { overrideAgent(rowKey: rowKey(target)) }
     static func overrideLaunch(_ target: LaunchTarget) -> String { overrideLaunch(rowKey: rowKey(target)) }
     static func overrideTerminal(_ target: LaunchTarget) -> String { overrideTerminal(rowKey: rowKey(target)) }

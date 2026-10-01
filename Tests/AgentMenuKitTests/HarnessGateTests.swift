@@ -276,7 +276,8 @@ private func gateRunCallLog(_ rig: GateRig) -> String {
 
 private let agentMenuScenarios = [
     "vanilla-first-run", "launch-terminal", "no-agent", "profile-work-only",
-    "profile-personal-only", "profile-both", "bridge-install",
+    "profile-personal-only", "profile-both", "bridge-install", "launch-at-login-prompt",
+    "sessions-tab", "owned-launch",
 ]
 
 // MARK: - Token
@@ -337,8 +338,8 @@ private func runGateRefusalTests(_ t: TestRunner, _ root: URL, _ gateSH: String)
         t.expect(!gateCallLog(rig).contains("release upload"), "report.public.json is never uploaded on refusal")
     }
 
-    // A report naming six of the seven AgentMenu scenarios is refused —
-    // simulated here by asking for all seven while the stub silently
+    // A report naming all but one of the AgentMenu scenarios is refused —
+    // simulated here by asking for all of them while the stub silently
     // relabels one run's own scenario field, so the compiled report is one
     // name short of what was requested.
     do {
@@ -398,7 +399,7 @@ private func runGateIntegrationTests(_ t: TestRunner, _ root: URL, _ gateSH: Str
         t.expect(env.contains("GH_CONFIG_DIR=/"), "gh ran with an isolated GH_CONFIG_DIR, not the maintainer's own")
 
         // Exactly one uploaded report.public.json, with the documented
-        // field set and seven scenario names.
+        // field set and one name per gate scenario.
         let uploaded = (try? FileManager.default.contentsOfDirectory(atPath: rig.state))?
             .filter { $0.hasPrefix("uploaded-") } ?? []
         t.expectEqual(uploaded.count, 1, "exactly one report.public.json was uploaded")
@@ -406,7 +407,7 @@ private func runGateIntegrationTests(_ t: TestRunner, _ root: URL, _ gateSH: Str
            let data = FileManager.default.contents(atPath: "\(rig.state)/\(name)"),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             t.expectEqual(obj["verdict"] as? String, "pass", "the uploaded report's verdict is pass")
-            t.expectEqual((obj["scenarios"] as? [String])?.count, 7, "all seven scenarios are named")
+            t.expectEqual((obj["scenarios"] as? [String])?.count, agentMenuScenarios.count, "every gate scenario is named")
         } else {
             t.expect(false, "could not read the uploaded report.public.json")
         }

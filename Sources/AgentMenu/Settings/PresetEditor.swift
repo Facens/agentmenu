@@ -51,6 +51,9 @@ struct PresetEditor: View {
         if let values = options.advisor {
             advisorRow(values)
         }
+        if options.keepRunning {
+            keepRunningRow()
+        }
         if !options.agents.isEmpty {
             row("Agent", values: options.agents.map(\.id), selection: $preset.agent,
                 inherited: inherited?.agent, names: Dictionary(uniqueKeysWithValues: options.agents.map { ($0.id, $0.name) }),
@@ -91,6 +94,20 @@ struct PresetEditor: View {
             }
         }
         .accessibilityIdentifier(AccessibilityID.Settings.preset(idScope, "advisor"))
+    }
+
+    /// Inherit, on or off. Nothing below the global default sets this field,
+    /// so its "inherited" value is the built-in default, ON — and the row says
+    /// so, in the defaults pane as well as in a folder.
+    private func keepRunningRow() -> some View {
+        let inheritedValue = inherited?.keepRunning ?? Preset.keepRunningDefault
+        let inheritWord = inherited == nil ? "Not set" : "Inherit"
+        return Picker("Keep running when window closes", selection: $preset.keepRunning) {
+            Text("\(inheritWord) (\(inheritedValue ? "on" : "off"))").tag(Bool?.none)
+            Text("On").tag(Bool?.some(true))
+            Text("Off").tag(Bool?.some(false))
+        }
+        .accessibilityIdentifier(AccessibilityID.Settings.preset(idScope, "keepRunning"))
     }
 
     private func inheritLabel(_ inherited: String?, names: [String: String]) -> String {
