@@ -62,14 +62,26 @@ final class AppEnvironment: ObservableObject {
         betaEnabled: { [weak self] in
             UpdatePolicy.betaEnabled(preference: self?.config.betaUpdates, version: agentMenuVersion)
         },
-        updatePending: { [weak self] pending in self?.updatePending = pending }
+        moment: { [weak self] in
+            UpdatePolicy.Moment(
+                popoverOpen: self?.sessions.isPopoverOpen ?? false,
+                sessionWorkInFlight: (self?.popover.launching != nil) || (self?.sessions.hasWorkInFlight ?? false),
+                modalOpen: NSApp.modalWindow != nil,
+                harnessDriven: UserDefaults.standard.bool(forKey: Overrides.harnessFlagKey),
+                idleSeconds: CGEventSource.secondsSinceLastEventType(
+                    .combinedSessionState, eventType: CGEventType(rawValue: ~0)!
+                )
+            )
+        },
+        pendingChanged: { [weak self] pending in self?.pendingUpdate = pending }
     )
 
-    /// True while an update is downloaded and waiting for the user to act on
-    /// it, and Sparkle is not itself putting a window in front of them (R18).
-    /// An app with no Dock icon has to say so somewhere of its own: the
-    /// status-item badge and the popover's own row both read this.
-    @Published private(set) var updatePending = false
+    /// An update Sparkle offered without a window of its own, or one it
+    /// downloaded and is holding for a relaunch (R18). An app with no Dock
+    /// icon has to say so somewhere of its own: the status-item badge and
+    /// the popover's own row both read this.
+    @Published private(set) var pendingUpdate = PendingUpdate.none
+    var updatePending: Bool { pendingUpdate != .none }
 
     private(set) lazy var popover = PopoverModel(environment: self, service: self)
     private(set) lazy var settings = SettingsModel(environment: self)

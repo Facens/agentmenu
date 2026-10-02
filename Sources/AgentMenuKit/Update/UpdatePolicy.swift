@@ -98,4 +98,54 @@ public enum UpdatePolicy {
     public static func defaultBetaPreference(version: String) -> Bool {
         ReleaseChannel(version: version) == .beta
     }
+
+    // MARK: - Installing a downloaded update
+
+    /// What the app is doing right now, as far as a relaunch is concerned.
+    ///
+    /// Sparkle downloads an update silently and then waits for the app to
+    /// quit before installing it. A menu-bar app almost never quits, so the
+    /// app installs it itself at a quiet moment, and these are the things
+    /// that make a moment not quiet.
+    public struct Moment: Equatable, Sendable {
+        /// The popover is showing: the user is looking at the app.
+        public var popoverOpen: Bool
+        /// A launch, a reopen or a quit is under way. A relaunch would cut
+        /// off its AppleScript, possibly with macOS's Automation prompt still
+        /// on screen, which macOS then records as a permanent Don't Allow.
+        public var sessionWorkInFlight: Bool
+        /// An alert of the app's own is up, waiting for an answer.
+        public var modalOpen: Bool
+        /// Launched by the first-run harness, whose scenarios must never see
+        /// the app restart under them.
+        public var harnessDriven: Bool
+        /// Seconds since the last keyboard or mouse input anywhere.
+        public var idleSeconds: Double
+
+        public init(popoverOpen: Bool, sessionWorkInFlight: Bool, modalOpen: Bool, harnessDriven: Bool, idleSeconds: Double) {
+            self.popoverOpen = popoverOpen
+            self.sessionWorkInFlight = sessionWorkInFlight
+            self.modalOpen = modalOpen
+            self.harnessDriven = harnessDriven
+            self.idleSeconds = idleSeconds
+        }
+    }
+
+    /// How long the user must have been away before the app restarts itself.
+    /// Ten minutes is also the longest a launch waits on an unanswered
+    /// Automation prompt, so a prompt left on screen has run out by then.
+    public static let quietInstallIdleSeconds: Double = 10 * 60
+
+    /// Whether to install a downloaded update now, relaunching the app.
+    ///
+    /// Sessions do not care: they live in the tmux host, which outlives the
+    /// app. What a relaunch can hurt is the user in the middle of something,
+    /// so every condition here is about them.
+    public static func mayInstallNow(_ moment: Moment) -> Bool {
+        !moment.harnessDriven
+            && !moment.popoverOpen
+            && !moment.sessionWorkInFlight
+            && !moment.modalOpen
+            && moment.idleSeconds >= quietInstallIdleSeconds
+    }
 }

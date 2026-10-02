@@ -379,6 +379,16 @@ final class SessionsModel: ObservableObject {
         rebuild()
     }
 
+    /// Read by the updater before it restarts the app.
+    var isPopoverOpen: Bool { popoverOpen }
+
+    /// A launch, a reopen or a quit is under way, and a relaunch now would
+    /// cut it off. Read by the updater before it restarts the app.
+    var hasWorkInFlight: Bool {
+        reopening != nil || reopeningLast || !quitting.isEmpty
+            || pending.contains { $0.phase == .starting }
+    }
+
     func popoverDidClose() {
         popoverOpen = false
         tracker.popoverOpenChanged(false)

@@ -100,4 +100,33 @@ func runUpdatePolicyTests(_ t: TestRunner) {
         UpdatePolicy.betaEnabled(preference: true, version: "0.2.0"),
         "someone on a final who asked for betas gets them"
     )
+
+    // MARK: - Installing a downloaded update at a quiet moment
+
+    let quiet = UpdatePolicy.Moment(
+        popoverOpen: false, sessionWorkInFlight: false, modalOpen: false,
+        harnessDriven: false, idleSeconds: UpdatePolicy.quietInstallIdleSeconds
+    )
+    t.expect(
+        UpdatePolicy.mayInstallNow(quiet),
+        "an idle user, a closed popover and nothing in flight is the moment to install"
+    )
+    var busy = quiet
+    busy.idleSeconds = UpdatePolicy.quietInstallIdleSeconds - 1
+    t.expect(!UpdatePolicy.mayInstallNow(busy), "a user who touched the machine recently is not interrupted")
+    busy = quiet
+    busy.popoverOpen = true
+    t.expect(!UpdatePolicy.mayInstallNow(busy), "an open popover is the user looking at the app")
+    busy = quiet
+    busy.sessionWorkInFlight = true
+    t.expect(
+        !UpdatePolicy.mayInstallNow(busy),
+        "a launch in flight is never cut off: its Automation prompt would be recorded as Don't Allow"
+    )
+    busy = quiet
+    busy.modalOpen = true
+    t.expect(!UpdatePolicy.mayInstallNow(busy), "an alert waiting for an answer is not thrown away")
+    busy = quiet
+    busy.harnessDriven = true
+    t.expect(!UpdatePolicy.mayInstallNow(busy), "a harness run never sees the app restart under a scenario")
 }

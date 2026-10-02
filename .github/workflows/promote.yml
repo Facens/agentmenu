@@ -161,6 +161,56 @@ jobs:
             echo "no appcast.xml on gh-pages yet — this promotion creates it"
           fi
 
+      - id: notes
+        name: Take the release notes from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          NAME: ${{ steps.release.outputs.name }}
+        run: |
+          # Sparkle's update window shows the item's description, and with
+          # none it shows a bare "ready to install" panel. The notes are the
+          # release's own "What's new" section, the part written for people
+          # running the app; the rest of the body (download steps, SHA-256)
+          # is for people downloading it by hand. No section, no notes: the
+          # promotion goes ahead without them.
+          #
+          # The body is read into a file and parsed from there, never
+          # expanded into this script: it is text anyone with write access
+          # to the release can set, and this job holds the EdDSA key.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .body > "$RUNNER_TEMP/release-body.md"
+          NOTES="$RUNNER_TEMP/feed/${NAME%.zip}.md"
+          python3 - "$RUNNER_TEMP/release-body.md" "$NOTES" <<'PY'
+          import re, sys
+
+          body, out = sys.argv[1], sys.argv[2]
+          lines = open(body, encoding="utf-8").read().replace("\r", "").split("\n")
+          # "What's new", "What's new in 0.3.0" and the like.
+          heading = re.compile(r"^(#{1,6})\s+what['\u2019]?s new\b.*$", re.IGNORECASE)
+          start = next((i for i, line in enumerate(lines) if heading.match(line.strip())), None)
+          if start is None:
+              print("no \"What's new\" section in the release body; the feed item carries no notes")
+              sys.exit(0)
+          level = len(heading.match(lines[start].strip()).group(1))
+          section = []
+          for line in lines[start + 1:]:
+              m = re.match(r"^(#{1,6})\s", line)
+              if m and len(m.group(1)) <= level:
+                  break
+              # GitHub's generated compare link lands under whatever section
+              # comes last; it is for the Releases page, not the update window.
+              if line.strip().startswith("**Full Changelog**"):
+                  continue
+              section.append(line)
+          text = "\n".join(section).strip()
+          if not text:
+              print("the \"What's new\" section is empty; the feed item carries no notes")
+              sys.exit(0)
+          open(out, "w", encoding="utf-8").write(text + "\n")
+          print(f"release notes: {len(text)} characters from \"What's new\"")
+          PY
+          if [ -f "$NOTES" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
       - name: Sign the feed
         env:
           SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
@@ -189,9 +239,14 @@ jobs:
           # The key goes in on stdin, never to disk: a runner's filesystem
           # outlives the step through the job's own temp directory, and this
           # is the one secret with no rotation path (KTD17).
+          # --embed-release-notes puts the notes file beside the archive into
+          # the new item's description. Without it generate_appcast links to
+          # the file under the download prefix instead, where it does not
+          # exist. Items already in the feed keep what they had.
           # shellcheck disable=SC2086
           printf '%s' "$SPARKLE_EDDSA_PRIVATE_KEY" | "$BIN/generate_appcast" \
             --ed-key-file - \
+            --embed-release-notes \
             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/" \
             --link "https://github.com/${GITHUB_REPOSITORY}" \
             $CHANNEL_ARG \
@@ -202,16 +257,17 @@ jobs:
       - name: Prove the feed describes these exact bytes
         env:
           NAME: ${{ steps.release.outputs.name }}
+          NOTES: ${{ steps.notes.outputs.present }}
         run: |
           # The signature and length in the feed have to cover the archive a
           # user downloads, which is the one hashed above. Reading them back
           # out and checking the length against the file on disk catches the
           # classic mistake — signing the pre-staple archive — because the
           # two differ in size.
-          python3 - "$RUNNER_TEMP/feed/appcast.xml" "$RUNNER_TEMP/feed/$NAME" "$NAME" <<'PY'
+          python3 - "$RUNNER_TEMP/feed/appcast.xml" "$RUNNER_TEMP/feed/$NAME" "$NAME" "$NOTES" <<'PY'
           import sys, os, xml.etree.ElementTree as ET
 
-          appcast, archive, name = sys.argv[1], sys.argv[2], sys.argv[3]
+          appcast, archive, name, notes = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
           ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
           root = ET.parse(appcast).getroot()
           enclosures = [e for e in root.iter("enclosure") if e.get("url", "").endswith(name)]
@@ -225,6 +281,10 @@ jobs:
           actual = os.path.getsize(archive)
           if length != actual:
               sys.exit(f"::error::the feed says {length} bytes, the asset is {actual}")
+          if notes == "true":
+              item = next(i for i in root.iter("item") if enclosure in list(i))
+              if not (item.findtext("description") or "").strip():
+                  sys.exit(f"::error::{name} had release notes, but its feed item carries no description")
           print(f"{name}: signed, {length} bytes, {len(list(root.iter('item')))} item(s) in the feed")
           PY
 

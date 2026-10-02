@@ -416,6 +416,11 @@ struct PopoverView: View {
         .accessibilityIdentifier(AccessibilityID.Popover.translocationBanner)
     }
 
+    private var updateButtonTitle: String {
+        if model.updateReadyToRelaunch { return "Restart to Update" }
+        return model.updatePending ? "Install Update…" : "Check for Updates"
+    }
+
     private var footer: some View {
         HStack(spacing: 10) {
             Text("AgentMenu \(agentMenuVersion)")
@@ -423,12 +428,17 @@ struct PopoverView: View {
                 .foregroundStyle(.secondary)
             Spacer()
             // R13: the manual check, beside the version it would replace.
-            // Sparkle's own window opening over this popover does not
-            // dismiss it — the popover is .applicationDefined, which is
-            // also why AgentMenu can carry menus inside it.
+            // The popover closes first: it floats above ordinary windows, so
+            // Sparkle's window opened underneath it with its default button
+            // covered.
             if model.canCheckForUpdates {
-                Button(model.updatePending ? "Install Update…" : "Check for Updates") {
-                    model.checkForUpdates()
+                Button(updateButtonTitle) {
+                    close()
+                    if model.updateReadyToRelaunch {
+                        model.installUpdateNow()
+                    } else {
+                        model.checkForUpdates()
+                    }
                 }
                 .buttonStyle(.link)
                 .font(.system(size: 11))

@@ -5,6 +5,17 @@ import AppKit
 import Sparkle
 import AgentMenuKit
 
+/// What the status item and the popover say about a waiting update.
+enum PendingUpdate: Equatable {
+    case none
+    /// Sparkle offered an update it is not showing a window for (R18).
+    case offered
+    /// Sparkle downloaded an update silently and is holding it for a
+    /// relaunch. The popover offers to restart now; the app does it by
+    /// itself at a quiet moment.
+    case readyToRelaunch
+}
+
 /// Everything this app knows about updating itself (U11 / R12, R13, R14,
 /// R18). The rules about *whether* to update and *what channel* to accept
 /// are `AgentMenuKit.UpdatePolicy`'s, where the test runner can reach them;
@@ -33,20 +44,37 @@ final class UpdaterController: NSObject {
     /// not as it stood at launch.
     private let betaEnabled: () -> Bool
 
-    /// Called when a scheduled update is waiting for the user to notice it,
-    /// and again with `false` once it is no longer waiting. Drives the
-    /// status-item badge and the popover's own row (R18) — a menu-bar app
-    /// with no Dock icon cannot rely on Sparkle's alert being seen.
-    private let updatePending: (Bool) -> Void
+    /// Called whenever what is waiting changes. Drives the status-item badge
+    /// and the popover's own row (R18) — a menu-bar app with no Dock icon
+    /// cannot rely on Sparkle's alert being seen.
+    private let pendingChanged: (PendingUpdate) -> Void
+
+    /// What the app is doing now, read each time a held install is
+    /// considered. See `UpdatePolicy.mayInstallNow`.
+    private let moment: () -> UpdatePolicy.Moment
+
+    /// Sparkle's handler for installing a silently downloaded update now and
+    /// relaunching. Sparkle would otherwise install it only when the app
+    /// quits, and a menu-bar app can run for weeks without quitting. Holding
+    /// it also stops Sparkle's update cycle, so it must be run eventually,
+    /// or this copy never sees another version. Kept after it runs: Sparkle allows it to
+    /// be run again if the termination is cancelled.
+    private var heldInstall: (() -> Void)?
+    /// Rechecks for a quiet moment while an install is held.
+    private var quietTimer: Timer?
+    /// Sparkle has offered an update without a window of its own.
+    private var offered = false
 
     init(
         version: String = agentMenuVersion,
         publicKey: String? = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
         betaEnabled: @escaping () -> Bool,
-        updatePending: @escaping (Bool) -> Void
+        moment: @escaping () -> UpdatePolicy.Moment,
+        pendingChanged: @escaping (PendingUpdate) -> Void
     ) {
         self.betaEnabled = betaEnabled
-        self.updatePending = updatePending
+        self.moment = moment
+        self.pendingChanged = pendingChanged
         super.init()
 
         if let refusal = UpdatePolicy.refusal(version: version, publicKey: publicKey) {
@@ -81,11 +109,42 @@ final class UpdaterController: NSObject {
         self.updater = controller.updater
     }
 
-    /// The popover's manual check (R13). Sparkle drives its own window from
-    /// here; AgentMenu's popover is `.applicationDefined`, so that window
-    /// appearing over it does not dismiss it.
+    /// The manual check (R13). Sparkle drives its own window from here. The
+    /// caller closes the popover first: it floats above other windows, so
+    /// Sparkle's window opened under it with its default button hidden.
     func checkForUpdates() {
         controller?.checkForUpdates(nil)
+    }
+
+    /// Installs the held update and relaunches, now. Sessions survive it:
+    /// they live in the tmux host, not in the app.
+    func installNow() {
+        guard let heldInstall else { return }
+        quietTimer?.invalidate()
+        quietTimer = nil
+        heldInstall()
+    }
+
+    private func publish() {
+        pendingChanged(heldInstall != nil ? .readyToRelaunch : offered ? .offered : .none)
+    }
+
+    private func hold(_ install: @escaping () -> Void) {
+        heldInstall = install
+        publish()
+        quietTimer?.invalidate()
+        // Once a minute is plenty against a ten-minute idle threshold.
+        // `.common`, so it keeps firing while a menu is tracking.
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.installIfQuiet() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        quietTimer = timer
+    }
+
+    private func installIfQuiet() {
+        guard UpdatePolicy.mayInstallNow(moment()) else { return }
+        installNow()
     }
 
     /// The Settings toggle (R13). Sparkle owns this preference — it is read
@@ -119,6 +178,22 @@ extension UpdaterController: SPUUpdaterDelegate {
         // closure is a value copy of a defaults/config read, not UI state.
         MainActor.assumeIsolated { UpdatePolicy.allowedChannels(betaEnabled: betaEnabled()) }
     }
+
+    /// Sparkle downloaded an update silently and would install it at quit.
+    /// Returning true takes the install over: the app runs the handler at a
+    /// quiet moment, or when the user picks Restart to Update. Sparkle still
+    /// installs at quit if neither happens first.
+    nonisolated func updater(
+        _ updater: SPUUpdater,
+        willInstallUpdateOnQuit item: SUAppcastItem,
+        immediateInstallationBlock immediateInstallHandler: @escaping () -> Void
+    ) -> Bool {
+        // Sparkle calls its delegate on the main thread, as for the channels
+        // above.
+        nonisolated(unsafe) let install = immediateInstallHandler
+        MainActor.assumeIsolated { hold(install) }
+        return true
+    }
 }
 
 // MARK: - SPUStandardUserDriverDelegate
@@ -151,15 +226,25 @@ extension UpdaterController: SPUStandardUserDriverDelegate {
             // Badge whenever Sparkle is not putting its own window in front:
             // that is exactly the case where nothing else on screen says an
             // update is waiting.
-            updatePending(!handleShowingUpdate)
+            offered = !handleShowingUpdate
+            publish()
         }
     }
 
+    // These two clear only Sparkle's offer. A held install stays pending
+    // until it runs: picking Install on Quit in Sparkle's window ends the
+    // session, and the update is still waiting.
     nonisolated func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
-        MainActor.assumeIsolated { updatePending(false) }
+        MainActor.assumeIsolated {
+            offered = false
+            publish()
+        }
     }
 
     nonisolated func standardUserDriverWillFinishUpdateSession() {
-        MainActor.assumeIsolated { updatePending(false) }
+        MainActor.assumeIsolated {
+            offered = false
+            publish()
+        }
     }
 }

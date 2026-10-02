@@ -84,7 +84,7 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         // A pending update has to reach the bar when it lands, not on the
         // next minute tick: the whole point of the badge is that it appears
         // while the user is looking at something else (R18).
-        environment.$updatePending
+        environment.$pendingUpdate
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.refreshIndicator() }
             }
@@ -131,6 +131,13 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         // checks against a running app; wiring it now leaves that probe
         // something to find rather than nothing.
         popoverContent.view.setAccessibilityIdentifier(AccessibilityID.Popover.container)
+        // The popover has to know its real size when it is placed. Without
+        // this it was positioned for a narrower content size, the SwiftUI
+        // view then grew to its full 400 points to the right, and NSPopover,
+        // which only keeps on screen the size it was told about, left the
+        // gear and Quit past the screen's right edge whenever the icon sat
+        // near it.
+        popoverContent.sizingOptions = .preferredContentSize
         popover.contentViewController = popoverContent
 
         // `.applicationDefined` hands every dismissal to us, and switching away
@@ -319,6 +326,12 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         // `didResignActive` observer above still closes it the moment focus
         // leaves.
         NSApp.activate(ignoringOtherApps: true)
+        // `popoverWillOpen()` may have changed what the content shows, so the
+        // size is measured again here, before placement, not after.
+        if let content = popover.contentViewController?.view {
+            content.layoutSubtreeIfNeeded()
+            popover.contentSize = content.fittingSize
+        }
         popover.show(relativeTo: anchorRect, of: anchorView, preferredEdge: .maxY)
         // The popover is key, so its own controls work; anything clicked outside
         // it closes it, which is what `.transient` would do — except `.transient`

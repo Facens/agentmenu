@@ -83,7 +83,7 @@ final class PopoverModel: ObservableObject {
         // An update that finished downloading while the popover was closed
         // is exactly the case the footer row exists for, so the view has to
         // be told when it lands (R18).
-        environment.$updatePending
+        environment.$pendingUpdate
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
     }
@@ -98,7 +98,13 @@ final class PopoverModel: ObservableObject {
     /// the footer from offering a check that can never find anything.
     var canCheckForUpdates: Bool { environment.updater.refusal == nil }
 
+    /// A downloaded update is held for a relaunch: the footer offers to
+    /// restart rather than to check.
+    var updateReadyToRelaunch: Bool { environment.pendingUpdate == .readyToRelaunch }
+
     func checkForUpdates() { environment.updater.checkForUpdates() }
+
+    func installUpdateNow() { environment.updater.installNow() }
 
     /// True while Gatekeeper is running this copy from its randomized
     /// read-only mount. Sparkle cannot replace a bundle there, and the
