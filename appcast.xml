@@ -3,6 +3,33 @@
     <channel>
         <title>AgentMenu</title>
         <item>
+            <title>0.3.0-beta.2</title>
+            <pubDate>Fri, 02 Oct 2026 15:37:02 +0000</pubDate>
+            <link>https://github.com/Facens/agentmenu</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>0.3.0.2</sparkle:version>
+            <sparkle:shortVersionString>0.3.0-beta.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[**Sessions.** A new Sessions tab lists your Claude Code sessions across accounts, live and recently closed.
+
+- A badge on the menu-bar icon counts the sessions waiting for you, and a notification tells you when one starts waiting.
+- Click a session to bring its terminal to the front, or to reattach one whose window you closed.
+- Sessions you launch from AgentMenu keep running when you close their window, and when you quit AgentMenu. Turn this off per folder with the `keep_running` preset field.
+- Quit any live session from its row, or quit everything AgentMenu started with Quit all.
+- Reopen all, or reopen the last one you closed. After a restart, AgentMenu offers to bring back what was running, and asks once whether to do that at every login.
+
+**Updates install without a quit.** Before, a downloaded update waited for you to quit AgentMenu, which a menu-bar app rarely does. Now the popover shows **Restart to Update**, and AgentMenu restarts by itself after ten idle minutes. Your sessions survive the restart.
+
+**Fixes**
+
+- The popover no longer runs off the right edge of the screen when the menu-bar icon sits near it.
+- The update window opens in front of the popover instead of behind it.
+- A launch no longer cuts off a pending macOS Automation prompt.
+]]></description>
+            <enclosure url="https://github.com/Facens/agentmenu/releases/download/v0.3.0-beta.2/AgentMenu-0.3.0-beta.2.zip" length="5536205" type="application/octet-stream" sparkle:edSignature="Lr/HcinLNqZxfrcGyRKgMTG8G7hhpOkVgpaUXCVUzFd+Wkz4hBjxyCdjfrZR+YrBFbJH9oIqTGgd4GBpFNRzDA=="/>
+        </item>
+        <item>
             <title>0.2.2-beta.3</title>
             <pubDate>Tue, 29 Sep 2026 09:33:02 +0000</pubDate>
             <link>https://github.com/Facens/agentmenu</link>
@@ -23,17 +50,6 @@
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/Facens/agentmenu/releases/download/v0.2.2-beta.2/AgentMenu-0.2.2-beta.2.zip" length="2261814" type="application/octet-stream" sparkle:edSignature="6tuTWo+QPQnFu10oA7vYXS0UW9HD86JO+OytcaNXzV5WclyeYQp3X6l7hjEiY0UpY5gtjpkhOvv2cuH7KYRXBA=="/>
-        </item>
-        <item>
-            <title>0.2.1-beta.1</title>
-            <pubDate>Mon, 28 Sep 2026 10:41:55 +0000</pubDate>
-            <link>https://github.com/Facens/agentmenu</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>0.2.1.1</sparkle:version>
-            <sparkle:shortVersionString>0.2.1-beta.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/Facens/agentmenu/releases/download/v0.2.1-beta.1/AgentMenu-0.2.1-beta.1.zip" length="2255185" type="application/octet-stream" sparkle:edSignature="ZXu4P7f0vfpF3BvyURkAG+tHAlxmvsqCHUqoWhFSQKgUHov9ss8lE+EElSdqvz+a6aMotoaYs3eyJjke5wqLDA=="/>
         </item>
         <item>
             <title>0.2.0</title>
